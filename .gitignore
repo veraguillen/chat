@@ -1,0 +1,36 @@
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Archivos de configuración sensible
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+chatbot.log
+
+# Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Archivos de desarrollo
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Archivos de distribución
+dist/
+build/
+*.egg-info/
+
+# Archivos temporales
+.DS_Store
+Thumbs.db
+
