@@ -12,3 +12,10 @@ openai>=0.1.0
 SQLAlchemy[asyncio] >= 1.4.0
 asyncpg
 aiohttp >= 3.8.1
+pdfplumber
+openai-whisper
+pytesseract
+python-pptx
+python-docx2txt
+requests
+pillow

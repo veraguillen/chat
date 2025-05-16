@@ -1,64 +1,102 @@
 # app/core/database.py
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import declarative_base, sessionmaker # sessionmaker ya estaba
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import declarative_base
 from app.core.config import settings
-# Añadir logger para debug de sesión
-from app.utils.logger import logger
-import traceback # Para loguear tracebacks de rollback
-
-# Crear engine (asumiendo que settings.database_url está definido y es correcto)
+# Importar logger de forma segura
 try:
-    engine = create_async_engine(
-        settings.database_url,
-        # future=True, # 'future=True' es por defecto en SQLAlchemy 2.0+, redundante si usas >=2.0
-        echo=False,  # Poner a True para depurar SQL si es necesario
-        pool_pre_ping=True,
-        pool_recycle=3600
-    )
-    logger.info("Motor SQLAlchemy asíncrono creado.")
-except Exception as e:
-    logger.error(f"Error creando el motor SQLAlchemy: {e}", exc_info=True)
-    engine = None # Marcar como None si falla la creación
+    from app.utils.logger import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger("database")
+    logger.addHandler(logging.StreamHandler())
+    logger.setLevel(logging.WARNING)
+import traceback
+from typing import AsyncGenerator, Optional
 
-# Crear fábrica de sesiones (sessionmaker)
-if engine:
-    AsyncSessionLocal = sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False # Importante para async y FastAPI
-    )
-    logger.info("Fábrica de sesiones SQLAlchemy asíncrona creada.")
-else:
-    AsyncSessionLocal = None
-    logger.error("No se pudo crear la fábrica de sesiones porque el motor falló.")
-
-
-# Crear Base declarativa para modelos
+# --- Variables Globales ---
+engine: Optional[create_async_engine] = None
+AsyncSessionLocal: Optional[async_sessionmaker[AsyncSession]] = None
 Base = declarative_base()
-logger.info("Base declarativa de SQLAlchemy creada.")
+# -------------------------
 
+async def initialize_database():
+    """Inicializa el engine y la fábrica de sesiones. Llamar desde lifespan."""
+    global engine, AsyncSessionLocal
+    logger.info("Iniciando inicialización de base de datos...")
 
-# Dependencia de FastAPI para gestionar la sesión
-async def get_db_session():
+    db_url = getattr(settings, 'database_url', None)
+    if not db_url:
+        logger.critical("DATABASE_URL no configurada en settings. No se puede inicializar la DB.")
+        return False
+
+    logger.info(f"Intentando crear engine para DB...")
+    try:
+        engine = create_async_engine(
+            db_url, echo=False, pool_pre_ping=True, pool_recycle=3600
+        )
+        # Verificar conexión
+        async with engine.connect() as connection:
+             logger.info("Conexión inicial a la base de datos exitosa.")
+        logger.info("Motor SQLAlchemy asíncrono creado.")
+
+        AsyncSessionLocal = async_sessionmaker(
+            bind=engine, class_=AsyncSession, expire_on_commit=False
+        )
+        logger.info("Fábrica de sesiones (AsyncSessionLocal) creada con éxito.")
+        return True
+
+    except Exception as e:
+        logger.critical(f"FALLO CRÍTICO inicializando base de datos: {e}", exc_info=True)
+        engine = None
+        AsyncSessionLocal = None
+        return False
+
+async def close_database_connection():
+    """Cierra la conexión del engine."""
+    global engine, AsyncSessionLocal
+    if engine:
+        logger.info("Cerrando conexiones del engine de base de datos...")
+        await engine.dispose()
+        logger.info("Conexiones cerradas.")
+    engine = None
+    AsyncSessionLocal = None
+
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Dependencia de FastAPI para obtener una sesión de DB."""
     if AsyncSessionLocal is None:
-        logger.error("Intento de obtener sesión DB, pero la fábrica de sesiones no está inicializada.")
-        raise RuntimeError("La configuración de la base de datos falló.")
+        logger.error("Fábrica de sesiones (AsyncSessionLocal) no inicializada.")
+        raise RuntimeError("La inicialización de la base de datos falló o no se ejecutó.")
 
-    # logger.debug("Creando nueva sesión de base de datos...")
-    async with AsyncSessionLocal() as session:
-        logger.debug(f"Sesión DB {id(session)} abierta.")
-        try:
-            yield session # Entrega la sesión a la función de la ruta
-            # --- ¡CORRECCIÓN CLAVE! ---
-            logger.debug(f"Ruta/Handler completado para sesión DB {id(session)}. Ejecutando commit...")
-            await session.commit() # Guarda los cambios si no hubo excepciones
-            logger.debug(f"Commit exitoso para sesión DB {id(session)}.")
-            # -------------------------
-        except Exception as e:
-            logger.error(f"Excepción durante la sesión DB {id(session)}, ejecutando rollback: {e}")
-            logger.error(traceback.format_exc()) # Loguea el traceback completo
-            await session.rollback() # Deshace los cambios en caso de error
-            raise # Re-lanza la excepción para que FastAPI la maneje
-        finally:
-            logger.debug(f"Cerrando sesión DB {id(session)}.")
-            await session.close() # Cierra la sesión al final
+    session: AsyncSession = AsyncSessionLocal()
+    logger.debug(f"Sesión DB {id(session)} creada.")
+    try:
+        yield session
+        logger.debug(f"Commit para sesión DB {id(session)}...")
+        await session.commit()
+        logger.debug(f"Commit exitoso sesión DB {id(session)}.")
+    except Exception as e:
+        logger.error(f"Rollback sesión DB {id(session)} debido a: {e}")
+        await session.rollback()
+        logger.error(traceback.format_exc()) # Loguear traceback completo del error
+        raise # Re-lanzar para que FastAPI maneje el error HTTP
+    finally:
+        logger.debug(f"Cerrando sesión DB {id(session)}.")
+        await session.close()
+
+# --- Función Opcional para Crear Tablas (Llamar Manualmente o desde Lifespan con cuidado) ---
+async def create_db_tables():
+    """Crea tablas definidas en Base.metadata si no existen."""
+    if engine is None:
+         logger.error("No se pueden crear tablas, el engine no está inicializado.")
+         return
+    logger.info("Verificando/Creando tablas de base de datos...")
+    async with engine.begin() as conn:
+         try:
+             # Importar modelos aquí para asegurar que Base los conozca
+             from app.models.user_state import UserState
+             from app.models.scheduling_models import Company, Interaction, Appointment
+             logger.info(f"Metadata Tables: {Base.metadata.tables.keys()}")
+             await conn.run_sync(Base.metadata.create_all)
+             logger.info("Tablas verificadas/creadas.")
+         except Exception as e:
+              logger.error(f"Error durante create_all: {e}", exc_info=True)

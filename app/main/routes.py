@@ -1,72 +1,90 @@
 # app/main/routes.py
-from fastapi import APIRouter, Query, Depends, Request, HTTPException
+from fastapi import APIRouter, Query, Depends, Request, HTTPException, Body
 from fastapi.responses import PlainTextResponse
-from app.core.config import settings # Importa tu config
-from app.main.webhook_handler import process_webhook_payload # Importa el handler principal
-from app.core.database import get_db_session # Importa la dependencia de sesión
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.utils.logger import logger # Importa tu logger
-import traceback
+from typing import Dict, Any, Optional
+import json # Para el manejo de JSON si es necesario
 
-# Usa el nombre 'router' o 'bp' consistentemente
-router = APIRouter() # Usaremos 'router'
+from app.core.config import settings
+from app.core.database import get_db_session
+from app.main.webhook_handler import process_webhook_payload # Ruta al handler
+from app.utils.logger import logger
 
-VERIFY_TOKEN = settings.verify_token # Lee desde la config
+router = APIRouter()
+
+VERIFY_TOKEN = settings.webhook_verify_token
+
+if not VERIFY_TOKEN:
+    logger.critical(
+        "CRÍTICO: WEBHOOK_VERIFY_TOKEN no está configurado. La verificación del webhook fallará."
+    )
 
 @router.get("/webhook", response_class=PlainTextResponse, tags=["Webhook"])
 async def verify_webhook_route(
-    # Usa Query para parámetros GET, el alias es correcto
-    hub_mode: str = Query(None, alias="hub.mode"),
-    hub_challenge: str = Query(None, alias="hub.challenge"),
-    hub_verify_token: str = Query(None, alias="hub.verify_token")
+    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
+    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
+    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token")
 ):
-    """Verifica el webhook para WhatsApp y Messenger."""
-    logger.debug(f"GET /webhook recibido. Mode: {hub_mode}, Token: {hub_verify_token}, Challenge: {hub_challenge}")
+    logger.debug(f"GET /webhook. Mode: '{hub_mode}', Token: '{hub_verify_token}', Challenge: '{hub_challenge}'")
+
+    if not VERIFY_TOKEN:
+        logger.error("VERIFY_TOKEN no disponible. No se puede verificar webhook.")
+        raise HTTPException(status_code=500, detail="Error de configuración del servidor.")
+
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         if hub_challenge:
-             logger.info(f"VERIFICACIÓN WEBHOOK EXITOSA. Challenge: {hub_challenge}")
-             return hub_challenge # FastAPI maneja PlainTextResponse si se especifica en response_class
+            logger.info(f"VERIFICACIÓN WEBHOOK EXITOSA. Challenge: '{hub_challenge}'")
+            return PlainTextResponse(content=hub_challenge)
         else:
-              logger.error("Falta hub.challenge en verificación.")
-              raise HTTPException(status_code=400, detail="Missing hub.challenge")
+            logger.error("Verificación Webhook: Falta 'hub.challenge'.")
+            raise HTTPException(status_code=400, detail="Falta 'hub.challenge'.")
+    elif hub_mode == "subscribe":
+        logger.warning(f"VERIFICACIÓN WEBHOOK FALLIDA: Token inválido. Recibido: '{hub_verify_token}'")
+        raise HTTPException(status_code=403, detail="Token de verificación inválido.")
     else:
-        logger.warning(f"VERIFICACIÓN WEBHOOK FALLIDA. Token recibido: '{hub_verify_token}', Token esperado: '{VERIFY_TOKEN}'")
-        raise HTTPException(status_code=403, detail="Invalid verification token")
-
+        logger.warning(f"VERIFICACIÓN WEBHOOK FALLIDA: Modo incorrecto o parámetros faltantes. Mode: '{hub_mode}'")
+        raise HTTPException(status_code=400, detail="Modo o parámetros inválidos.")
 
 @router.post("/webhook", tags=["Webhook"])
-async def receive_webhook_route(request: Request, db: AsyncSession = Depends(get_db_session)):
-    """Recibe notificaciones de webhook de Meta (WhatsApp y Messenger)."""
-    # --- (Aquí iría la verificación de firma si la implementas) ---
-    # signature = request.headers.get("X-Hub-Signature-256")
-    # raw_payload = await request.body()
-    # if not verify_signature(raw_payload, signature): # Necesitarías la función verify_signature
-    #     raise HTTPException(status_code=403, detail="Invalid signature")
-    # payload = await request.json() # Parsear DESPUÉS de verificar firma
-
-    # Si no hay verificación de firma (como ahora):
+async def receive_webhook_route(
+    request: Request,
+    db_session_dep: AsyncSession = Depends(get_db_session) # Renombrar la variable de dependencia para evitar conflicto
+    # payload_body: Dict[str, Any] = Body(...) # Alternativa
+):
+    logger.info("POST /webhook recibido. Procesando payload...")
+    
+    payload: Dict[str, Any]
     try:
         payload = await request.json()
-        logger.info(f"POST /webhook recibido.")
-        logger.debug(f"Payload: {payload}") # Loguea el payload para debug
-    except Exception as e:
-         logger.error(f"Error al parsear JSON del webhook: {e}")
-         # Es útil loguear el cuerpo raw si falla el JSON
-         try:
-             raw_body = await request.body()
-             logger.debug(f"Raw body: {raw_body.decode()}")
-         except Exception:
-             logger.debug("No se pudo leer el raw body.")
-         raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        logger.debug(f"Payload JSON recibido: {json.dumps(payload, indent=2, ensure_ascii=False)[:1000]}...") # Limitar log y asegurar no-ascii
+    except json.JSONDecodeError as json_error: # Ser específico con la excepción
+        logger.error(f"Error al parsear JSON del webhook: {json_error}", exc_info=True)
+        raw_body_for_log = "No se pudo leer el cuerpo crudo."
+        try:
+            raw_body = await request.body()
+            raw_body_for_log = raw_body.decode(errors='ignore')[:500]
+        except Exception as body_error:
+            logger.debug(f"No se pudo leer el cuerpo crudo para logging: {body_error}")
+        logger.debug(f"Cuerpo crudo (si se pudo leer, primeros 500 chars): {raw_body_for_log}")
+        raise HTTPException(status_code=400, detail=f"Payload JSON inválido: {str(json_error)}")
+    except Exception as e_req: # Otros errores al leer request
+        logger.error(f"Error al obtener JSON del request: {e_req}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Error al leer el cuerpo de la solicitud.")
 
     try:
-        # Pasa el payload y la sesión de DB al handler principal
-        await process_webhook_payload(payload, db=db)
-        # Responde OK a Meta inmediatamente
-        return {"status": "success"}
-    except Exception as e:
-        # Captura errores del process_webhook_payload
-        logger.error(f"Error inesperado en la ruta /webhook POST durante process_webhook_payload: {e}\n{traceback.format_exc()}")
-        # El rollback de 'db' ocurre en la dependencia get_db_session
-        # Responde OK a Meta para evitar reintentos, pero el error queda logueado
-        return {"status": "error logged"}
+        # --- CORRECCIÓN AQUÍ ---
+        # Llamar a process_webhook_payload con el nombre de parámetro db_session
+        await process_webhook_payload(payload=payload, db_session=db_session_dep, request=request)
+
+        logger.info("Payload procesado exitosamente por process_webhook_payload.")
+        return {"status": "success", "message": "Evento de webhook recibido y aceptado."}
+
+    except HTTPException:
+        raise # Relanzar HTTPExceptions para que FastAPI las maneje
+    except Exception as processing_error:
+        logger.error(
+            f"Error inesperado durante la ejecución de process_webhook_payload: {processing_error}",
+            exc_info=True
+        )
+        # Devolver 200 OK a Meta para evitar reintentos y desactivación del webhook.
+        return {"status": "error_processing_event", "message": "Evento recibido, error interno durante procesamiento."}
