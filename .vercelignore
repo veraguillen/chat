@@ -1,9 +1,6 @@
-.git
-__pycache__
-*.py[cod]
-*$py.class
-*.so
-.Python
+# Directories
+.git/
+__pycache__/
 env/
 build/
 develop-eggs/
@@ -17,8 +14,27 @@ parts/
 sdist/
 var/
 *.egg-info/
-.installed.cfg
-*.egg
-.env
 knowledge_base/
 data/
+alembic/
+
+# Specific files to ignore
+run.py
+test.py
+verify_index.py
+.env
+
+# Python cache
+*.py[cod]
+*$py.class
+*.so
+.Python
+.installed.cfg
+*.egg
+
+# ML related dependencies to reduce size
+**/torch/
+**/transformers/
+**/sentence_transformers/
+**/faiss_cpu/
+**/langchain/
