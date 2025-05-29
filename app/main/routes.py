@@ -12,7 +12,8 @@ from app.utils.logger import logger
 
 router = APIRouter()
 
-VERIFY_TOKEN = settings.webhook_verify_token
+settings.verify_token 
+VERIFY_TOKEN = settings.verify_token
 
 if not VERIFY_TOKEN:
     logger.critical(

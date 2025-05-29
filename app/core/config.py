@@ -1,246 +1,247 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, model_validator
-from pathlib import Path
-from typing import Optional, Any, Dict
 import os
 import logging
-import aiofiles
+from pathlib import Path
+from typing import Optional, List, Union, Any # Añadido Any para __init__
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, model_validator, HttpUrl
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-# --- Initial .env Load ---
-_ENV_FILE_PATH_TO_CHECK_FOR_DOTENV = Path(__file__).resolve().parent.parent.parent / '.env'
-if _ENV_FILE_PATH_TO_CHECK_FOR_DOTENV.is_file():
-    load_dotenv(dotenv_path=_ENV_FILE_PATH_TO_CHECK_FOR_DOTENV, override=True)
-
-# --- Logging Setup ---
-_LOG_FORMAT_TEMP = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
-logging.basicConfig(
-    level=logging.INFO,
-    format=_LOG_FORMAT_TEMP,
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-_temp_logger = logging.getLogger("app.core.config_loader")
-
-# --- Base Path Calculations ---
+# --- Cálculo de Rutas Base (antes de cualquier otra cosa) ---
 try:
-    CORE_DIR = Path(__file__).resolve().parent
-    APP_DIR = CORE_DIR.parent
-    BASE_DIR = APP_DIR.parent
-    DATA_DIR = BASE_DIR / "data"
-    BRANDS_DIR = DATA_DIR / "brands"
-    LOG_DIR = BASE_DIR / "logs"
-    KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
-    _temp_logger.info(f"Rutas base calculadas: BASE_DIR={BASE_DIR}, KNOWLEDGE_BASE_DIR={KNOWLEDGE_BASE_DIR}")
-except Exception as e:
-    _temp_logger.error(f"Error crítico calculando rutas base: {e}. Usando fallbacks relativos.", exc_info=True)
-    BASE_DIR = Path(".").resolve()
-    DATA_DIR = BASE_DIR / "data"
-    BRANDS_DIR = DATA_DIR / "brands"
-    LOG_DIR = BASE_DIR / "logs"
-    KNOWLEDGE_BASE_DIR = BASE_DIR / "knowledge_base"
+    # Asumimos que este archivo (config.py) está en app/core/config.py
+    # Subimos tres niveles para llegar a la raíz del proyecto
+    PROJECT_ROOT_DIR = Path(__file__).resolve().parent.parent.parent 
+except NameError: 
+    # Fallback si __file__ no está definido (ej. en algunos contextos de ejecución interactiva)
+    PROJECT_ROOT_DIR = Path(".").resolve() # Raíz del directorio de trabajo actual
 
-_ENV_FILE_PATH_TO_CHECK = BASE_DIR / '.env'
+ENV_FILE_PATH = PROJECT_ROOT_DIR / '.env'
 
-# --- .env Debug ---
-_temp_logger.info(f"Pydantic intentará usar el archivo .env desde: '{_ENV_FILE_PATH_TO_CHECK}' (según model_config)")
-if _ENV_FILE_PATH_TO_CHECK.is_file():
-    _temp_logger.info(f"El archivo .env '{_ENV_FILE_PATH_TO_CHECK}' EXISTE (verificado por Pydantic).")
-    try:
-        with open(_ENV_FILE_PATH_TO_CHECK, 'r', encoding='utf-8') as f_env_debug:
-            env_content_sample = f_env_debug.read(1000)
-    except Exception as e_read_env:
-        _temp_logger.error(f"Error al intentar leer el archivo .env para depuración: {e_read_env}")
+# --- Carga Inicial de .env (principalmente para desarrollo local) ---
+if ENV_FILE_PATH.is_file():
+    load_dotenv(dotenv_path=ENV_FILE_PATH, override=True)
+    # No es necesario loguear aquí, Pydantic lo hará o podemos loguearlo después en Settings
 else:
-    _temp_logger.warning(f"El archivo .env '{_ENV_FILE_PATH_TO_CHECK}' NO EXISTE (según Pydantic).")
+    # En producción (Azure), es normal que .env no exista, las variables vienen del entorno
+    pass
+
+# --- Configuración de Logging Básico para ESTE MÓDULO ---
+# Este logger se usa ANTES de que la configuración completa de Settings esté disponible
+# y antes de que el logger principal de la aplicación se configure.
+_LOG_FORMAT_DEFAULT_CONFIG = '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s'
+_config_module_logger = logging.getLogger("app.core.config_loader_module") # Nombre único
+if not _config_module_logger.hasHandlers(): # Evitar añadir handlers múltiples veces
+    _stream_handler_config = logging.StreamHandler()
+    _formatter_config = logging.Formatter(_LOG_FORMAT_DEFAULT_CONFIG, datefmt='%Y-%m-%d %H:%M:%S')
+    _stream_handler_config.setFormatter(_formatter_config)
+    _config_module_logger.addHandler(_stream_handler_config)
+    _config_module_logger.setLevel(os.getenv("INIT_LOG_LEVEL", "INFO").upper()) # Nivel de log inicial
+
+_config_module_logger.info(f"PROJECT_ROOT_DIR calculado como: {PROJECT_ROOT_DIR}")
+_config_module_logger.info(f"Pydantic intentará cargar .env desde: '{ENV_FILE_PATH}' (si existe)")
+
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "ChatbotMultimarca_Citas_RAG_v2.3_OpenRouter"
-    VERSION: str = "2.3.0"
+    PROJECT_NAME: str = "Chatbot_App_Default_Name"
+    VERSION: str = "1.0.0"
     STARTUP_TIMESTAMP: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-    BASE_DIR: Path = Field(default=BASE_DIR)
-    DATA_DIR: Path = Field(default=DATA_DIR)
-    BRANDS_DIR: Path = Field(default=BRANDS_DIR)
-    LOG_DIR: Path = Field(default=LOG_DIR)
-    KNOWLEDGE_BASE_DIR: Optional[Path] = Field(default=KNOWLEDGE_BASE_DIR)
+    # --- Paths Base (calculados en el validador o __init__) ---
+    BASE_DIR: Path # Se establecerá en el validador usando PROJECT_ROOT_DIR
+    DATA_DIR: Path
+    BRANDS_DIR: Path
+    LOG_DIR: Path
+    KNOWLEDGE_BASE_DIR: Path
+    
+    # --- Configuración de LLM ---
+    LLM_TEMPERATURE: float = Field(default=0.5, ge=0.0, le=2.0)
+    LLM_MAX_TOKENS: int = Field(default=1000, gt=0)
 
-    LLM_TEMPERATURE: float = Field(default=0.5, ge=0.0, le=2.0, validation_alias="LLM_TEMPERATURE")
-    LLM_MAX_TOKENS: int = Field(default=1000, gt=0, validation_alias="LLM_MAX_TOKENS")
-
+    # --- Configuración de Meta (WhatsApp, Messenger) ---
     whatsapp_phone_number_id: Optional[str] = Field(default=None, validation_alias="WHATSAPP_PHONE_NUMBER_ID")
     whatsapp_access_token: Optional[str] = Field(default=None, validation_alias="WHATSAPP_ACCESS_TOKEN")
     meta_api_version: str = Field(default="v19.0", validation_alias="META_API_VERSION")
     messenger_page_access_token: Optional[str] = Field(default=None, validation_alias="MESSENGER_PAGE_ACCESS_TOKEN")
-    webhook_verify_token: Optional[str] = Field(default=None, validation_alias="VERIFY_TOKEN")
+    verify_token: Optional[str] = Field(default=None, validation_alias="VERIFY_TOKEN") # Para webhook verification
 
-    OPENROUTER_API_KEY: Optional[str] = Field(default=None)
+    # --- Configuración de OpenRouter ---
+    OPENROUTER_API_KEY: Optional[str] = None
     OPENROUTER_MODEL_CHAT: str = Field(default="mistralai/mistral-7b-instruct-v0.2")
-    OPENROUTER_CHAT_ENDPOINT: str = Field(default="https://openrouter.ai/api/v1")
+    OPENROUTER_CHAT_ENDPOINT: HttpUrl = Field(default="https://openrouter.ai/api/v1")
 
-    http_client_timeout: float = Field(default=30.0, gt=0, validation_alias="HTTP_CLIENT_TIMEOUT")
-    database_url: Optional[str] = Field(default=None, validation_alias="DATABASE_URL")
+    # --- Configuración de Cliente HTTP ---
+    HTTP_CLIENT_TIMEOUT: float = Field(default=30.0, gt=0)
 
+    # --- Configuración de Base de Datos PostgreSQL ---
+    pguser: Optional[str] = Field(default=None, validation_alias="PGUSER")
+    pgpassword: Optional[str] = Field(default=None, validation_alias="PGPASSWORD")
+    pghost: Optional[str] = Field(default=None, validation_alias="PGHOST")
+    pgdatabase: Optional[str] = Field(default=None, validation_alias="PGDATABASE")
+    pgport: int = Field(default=5432, validation_alias="PGPORT") # Añadido pgport para la URL
+    database_url: Optional[str] = Field(default=None, validation_alias="DATABASE_URL") # Puede ser provista directamente
+
+    # --- Configuración de Logging de la Aplicación ---
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
-    log_format: str = Field(default=_LOG_FORMAT_TEMP, validation_alias="LOG_FORMAT")
-    log_file: Optional[Path] = None
+    log_format: str = Field(default=_LOG_FORMAT_DEFAULT_CONFIG, validation_alias="LOG_FORMAT") # Usar el mismo formato
+    log_file: Path # Se calculará en el validador
     log_max_size_bytes: int = Field(default=10 * 1024 * 1024, gt=0, validation_alias="LOG_MAX_SIZE_BYTES")
     log_backup_count: int = Field(default=5, ge=0, validation_alias="LOG_BACKUP_COUNT")
 
-    embedding_model_name: str = Field(
-        default='sentence-transformers/paraphrase-multilingual-mpnet-base-v2',
-        validation_alias="EMBEDDING_MODEL_NAME"
-    )
-    faiss_index_name: str = Field(default="index", validation_alias="FAISS_INDEX_NAME")
-    faiss_folder_name: str = Field(default="faiss_index_multilingual_v1", validation_alias="FAISS_FOLDER_NAME")
-    faiss_folder_path: Optional[Path] = None
+    # --- Configuración de Azure Storage ---
+    storage_account_name: Optional[str] = Field(default=None, validation_alias="STORAGE_ACCOUNT_NAME")
+    container_name: Optional[str] = Field(default=None, validation_alias="CONTAINER_NAME")
+
+    # --- Configuración RAG ---
+    embedding_model_name: str = Field(default='sentence-transformers/paraphrase-multilingual-mpnet-base-v2', validation_alias="EMBEDDING_MODEL_NAME")
+    faiss_index_name: str = Field(default="index", validation_alias="FAISS_INDEX_NAME") # Nombre base de los archivos .faiss y .pkl
+    faiss_folder_name: str = Field(default="faiss_index_kb_spanish_v1", validation_alias="FAISS_FOLDER_NAME") # Subcarpeta dentro de DATA_DIR
+    faiss_folder_path: Path # Se calculará en el validador
     vector_db_type: str = Field(default="FAISS", validation_alias="VECTOR_DB_TYPE")
     rag_default_k: int = Field(default=3, ge=1, le=10, validation_alias="RAG_DEFAULT_K")
-    rag_chunk_size: int = Field(default=1000, gt=0, validation_alias="RAG_CHUNK_SIZE")
-    rag_chunk_overlap: int = Field(default=150, ge=0, validation_alias="RAG_CHUNK_OVERLAP")
-
+    rag_k_fetch_multiplier: int = Field(default=2, validation_alias="RAG_K_FETCH_MULTIPLIER")
+    
+    # --- Configuración de Calendly ---
     calendly_api_key: Optional[str] = Field(default=None, validation_alias="CALENDLY_API_KEY")
-    calendly_event_type_uri: Optional[str] = Field(default=None, validation_alias="CALENDLY_EVENT_TYPE_URI")
+    calendly_event_type_uri: Optional[HttpUrl] = Field(default=None, validation_alias="CALENDLY_EVENT_TYPE_URI")
     calendly_timezone: str = Field(default="America/Mexico_City", validation_alias="CALENDLY_TIMEZONE")
     calendly_user_slug: Optional[str] = Field(default=None, validation_alias="CALENDLY_USER_SLUG")
     calendly_days_to_check: int = Field(default=7, gt=0, le=60, validation_alias="CALENDLY_DAYS_TO_CHECK")
 
-    server_host: str = Field(default="0.0.0.0", validation_alias="SERVER_HOST")
-    server_port: int = Field(default=8000, gt=1023, lt=65536, validation_alias="SERVER_PORT")
+    # --- Configuración del Servidor Uvicorn/Gunicorn ---
+    server_host: str = Field(default="0.0.0.0", validation_alias="SERVER_HOST") # Para Uvicorn si se usa run.py
+    server_port: int = Field(default=8000, gt=1023, lt=65536, validation_alias="SERVER_PORT") # Para Uvicorn si se usa run.py
 
     model_config = SettingsConfigDict(
-        env_file=_ENV_FILE_PATH_TO_CHECK,
+        env_file=ENV_FILE_PATH if ENV_FILE_PATH.is_file() else None, # Solo carga si existe
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
+        case_sensitive=False # Variables de entorno no son case-sensitive
     )
 
     @model_validator(mode='after')
-    def _calculate_and_create_paths(self) -> 'Settings':
-        if not self.BASE_DIR.is_absolute():
-            try:
-                core_dir_val = Path(__file__).resolve().parent
-                app_dir_val = core_dir_val.parent
-                self.BASE_DIR = app_dir_val.parent
-            except Exception:
-                self.BASE_DIR = Path(".").resolve()
+    def _process_and_validate_settings(self) -> 'Settings':
+        _config_module_logger.info("Ejecutando _process_and_validate_settings Pydantic model_validator...")
+        
+        # Establecer BASE_DIR usando la variable global calculada al inicio del módulo
+        self.BASE_DIR = PROJECT_ROOT_DIR
+        _config_module_logger.info(f"  BASE_DIR establecido a: {self.BASE_DIR}")
 
-        if not self.LOG_DIR or not self.LOG_DIR.is_absolute():
-            self.LOG_DIR = self.BASE_DIR / "logs"
-        self.log_file = self.LOG_DIR / f"chatbot_{datetime.now().strftime('%Y%m%d')}.log"
-
-        if not self.DATA_DIR or not self.DATA_DIR.is_absolute():
-            self.DATA_DIR = self.BASE_DIR / "data"
-
-        if self.faiss_folder_name:
+        # Calcular y crear LOG_DIR y self.log_file
+        self.LOG_DIR = self.BASE_DIR / "logs"
+        self.log_file = self.LOG_DIR / f"chatbot_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_utc')}.log"
+        _config_module_logger.info(f"  LOG_DIR calculado: {self.LOG_DIR}")
+        _config_module_logger.info(f"  log_file calculado: {self.log_file}")
+        
+        # Calcular otros directorios basados en BASE_DIR y DATA_DIR
+        self.DATA_DIR = self.BASE_DIR / "data"
+        self.BRANDS_DIR = self.DATA_DIR / "brands"
+        self.KNOWLEDGE_BASE_DIR = self.BASE_DIR / "knowledge_base" # Si usas esta carpeta separada
+        
+        # Calcular el path completo a la carpeta del índice FAISS
+        if self.faiss_folder_name: # faiss_folder_name es el nombre de la subcarpeta dentro de DATA_DIR
             self.faiss_folder_path = self.DATA_DIR / self.faiss_folder_name
+            _config_module_logger.info(f"  faiss_folder_path calculado: {self.faiss_folder_path}")
+        else:
+            _config_module_logger.error("  faiss_folder_name no está definido, faiss_folder_path no se puede calcular.")
+            # Considera lanzar un error aquí si es crítico
+            # raise ValueError("faiss_folder_name debe estar definido en la configuración.")
+            self.faiss_folder_path = self.DATA_DIR / "default_faiss_index" # Fallback o error
 
-        if not self.BRANDS_DIR or not self.BRANDS_DIR.is_absolute():
-            self.BRANDS_DIR = self.DATA_DIR / "brands"
-
-        if self.KNOWLEDGE_BASE_DIR and not self.KNOWLEDGE_BASE_DIR.is_absolute():
-            self.KNOWLEDGE_BASE_DIR = self.BASE_DIR / "knowledge_base"
-        elif not self.KNOWLEDGE_BASE_DIR:
-            self.KNOWLEDGE_BASE_DIR = self.BASE_DIR / "knowledge_base"
-
-        dirs_to_create = [self.LOG_DIR, self.DATA_DIR, self.BRANDS_DIR]
-        if self.KNOWLEDGE_BASE_DIR:
-            dirs_to_create.append(self.KNOWLEDGE_BASE_DIR)
-        if self.faiss_folder_path:
+        # Crear directorios necesarios
+        dirs_to_create: List[Path] = [self.LOG_DIR, self.DATA_DIR, self.BRANDS_DIR, self.KNOWLEDGE_BASE_DIR]
+        if hasattr(self, 'faiss_folder_path') and self.faiss_folder_path: # Asegurarse que faiss_folder_path exista
             dirs_to_create.append(self.faiss_folder_path)
 
         for dir_path in dirs_to_create:
-            if dir_path and isinstance(dir_path, Path):
+            if dir_path: # Asegurarse que el path no sea None
                 try:
                     dir_path.mkdir(parents=True, exist_ok=True)
+                    _config_module_logger.info(f"  Directorio asegurado/creado: {dir_path}")
                 except Exception as e_mkdir:
-                    _temp_logger.error(f"No se pudo crear directorio {dir_path}: {e_mkdir}")
-            elif dir_path:
-                _temp_logger.warning(f"Path esperado para dir, se obtuvo: {dir_path} (tipo: {type(dir_path)})")
+                    _config_module_logger.error(f"  No se pudo crear directorio {dir_path}: {e_mkdir}")
+        
+        # Validar y normalizar LOG_LEVEL
+        self.log_level = self.log_level.upper()
+        valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if self.log_level not in valid_log_levels:
+            _config_module_logger.warning(f"  LOG_LEVEL '{self.log_level}' inválido. Usando INFO por defecto.")
+            self.log_level = "INFO"
+            
+        # Construir DATABASE_URL si no se proveyó explícitamente y los componentes están disponibles
+        if not self.database_url and all([self.pguser, self.pgpassword, self.pghost, self.pgdatabase, self.pgport]):
+            self.database_url = f"postgresql+asyncpg://{self.pguser}:{self.pgpassword}@{self.pghost}:{self.pgport}/{self.pgdatabase}?ssl=require"
+            _config_module_logger.info(f"  DATABASE_URL construida internamente: postgresql+asyncpg://{self.pguser}:***@{self.pghost}:{self.pgport}/{self.pgdatabase}?ssl=require")
+        elif self.database_url:
+            # Validaciones opcionales para una DATABASE_URL provista
+            if "asyncpg" not in self.database_url:
+                 _config_module_logger.warning(f"  DATABASE_URL provista puede no ser para 'asyncpg'.")
+            if "?ssl=require" not in self.database_url and "localhost" not in self.database_url and "127.0.0.1" not in self.database_url :
+                 _config_module_logger.warning(f"  DATABASE_URL provista no especifica '?ssl=require' y no parece ser local.")
+        else:
+            _config_module_logger.critical("  DATABASE_URL no se proveyó ni se pudo construir. La conexión a la base de datos fallará.")
+            
+        _config_module_logger.info("Finalizada validación y procesamiento de settings en _process_and_validate_settings.")
         return self
 
+# --- Singleton para la instancia de Settings ---
 _settings_instance: Optional[Settings] = None
 
 def get_settings() -> Settings:
     global _settings_instance
     if _settings_instance is None:
+        _config_module_logger.debug("get_settings(): Creando nueva instancia de Settings...")
         try:
-            _temp_logger.debug("Primera llamada a get_settings(), inicializando Settings...")
-            current_settings = Settings()
-            _settings_instance = current_settings
-            _temp_logger.info("Instancia de Settings creada y validada.")
-            _log_essential_settings_info(_settings_instance)
+            _settings_instance = Settings()
+            _config_module_logger.info("Instancia de Settings creada y validada exitosamente por Pydantic.")
+            # Loguear un resumen de la configuración esencial (cuidado con datos sensibles en producción)
+            # _log_essential_settings_info(_settings_instance) # Descomentar para depuración detallada
         except Exception as e_load:
-            _temp_logger.critical(f"ERROR FATAL en get_settings(): {e_load}", exc_info=True)
-            if hasattr(e_load, 'errors'):
-                _temp_logger.critical(f"Detalles de validación: {e_load.errors()}")
-            raise RuntimeError(f"Configuración falló al cargar: {e_load}")
+            _config_module_logger.critical(f"ERROR FATAL creando instancia de Settings en get_settings(): {e_load}", exc_info=True)
+            if hasattr(e_load, 'errors'): # Específico para pydantic.ValidationError
+                _config_module_logger.critical(f"Detalles de validación de Pydantic: {e_load.errors()}")
+            raise RuntimeError(f"La carga de configuración de la aplicación falló críticamente: {e_load}")
     return _settings_instance
 
+# Función de ayuda para loguear un resumen (opcional, para depuración)
 def _log_essential_settings_info(s: Settings):
-    _temp_logger.info("--- Configuración Esencial Cargada ---")
-    _temp_logger.info(f"  PROJECT_NAME: {s.PROJECT_NAME}, VERSION: {s.VERSION}")
-    _temp_logger.info(f"  LOG_LEVEL: {s.log_level}, LOG_FILE: {s.log_file}")
-    _temp_logger.info(f"  LLM_TEMPERATURE: {s.LLM_TEMPERATURE}")
-    _temp_logger.info(f"  LLM_MAX_TOKENS: {s.LLM_MAX_TOKENS}")
-    _temp_logger.info(f"  EMBEDDING_MODEL: {s.embedding_model_name}")
-    _temp_logger.info(f"  FAISS_INDEX_PATH: {s.faiss_folder_path}")
-    _temp_logger.info(f"  OPENROUTER_MODEL: {s.OPENROUTER_MODEL_CHAT}")
-    _temp_logger.info(f"  OPENROUTER_API_KEY: {'Presente' if s.OPENROUTER_API_KEY else 'AUSENTE'}")
-    _temp_logger.info(f"  CALENDLY_EVENT_URI: {s.calendly_event_type_uri if s.calendly_event_type_uri else 'AUSENTE'}")
-    _temp_logger.info(f"  CALENDLY_API_KEY: {'Presente' if s.calendly_api_key else 'AUSENTE'}")
+    _config_module_logger.info("--- Resumen de Configuración Cargada (get_settings) ---")
+    _config_module_logger.info(f"  PROJECT_NAME: {s.PROJECT_NAME}, VERSION: {s.VERSION}")
+    _config_module_logger.info(f"  LOG_LEVEL (app): {s.log_level}, LOG_FILE (app): {s.log_file}")
+    _config_module_logger.info(f"  Calculated FAISS Folder Path: {s.faiss_folder_path}")
     
-    missing = [k for k, v in {
-        "OPENROUTER_API_KEY": s.OPENROUTER_API_KEY,
+    db_url_display = 'AUSENTE O NO CONSTRUIDA'
+    if s.database_url:
+        parts = s.database_url.split('@')
+        db_url_display = f"...@{parts[-1]}" if len(parts) > 1 else "Formato no estándar o incompleta"
+    _config_module_logger.info(f"  DATABASE_URL (final para conexión): {db_url_display}")
+
+    # Lista de variables consideradas críticas para el funcionamiento
+    critical_vars_check = {
+        "DATABASE_URL": s.database_url, # Verificar la URL final
         "WHATSAPP_ACCESS_TOKEN": s.whatsapp_access_token,
         "WHATSAPP_PHONE_NUMBER_ID": s.whatsapp_phone_number_id,
-        "WEBHOOK_VERIFY_TOKEN": s.webhook_verify_token,
-        "CALENDLY_API_KEY": s.calendly_api_key,
-        "CALENDLY_EVENT_TYPE_URI": s.calendly_event_type_uri,
-        "DATABASE_URL": s.database_url
-    }.items() if not v]
+        "VERIFY_TOKEN": s.verify_token,
+        # "OPENROUTER_API_KEY": s.OPENROUTER_API_KEY, # Depende si es crítico para el arranque
+        # "CALENDLY_API_KEY": s.calendly_api_key, # Depende si es crítico
+    }
+    if hasattr(s, 'faiss_folder_path') and not s.faiss_folder_path.is_dir():
+         _config_module_logger.critical(f"  ¡¡RUTA FAISS CRÍTICA NO ES UN DIRECTORIO!!: {s.faiss_folder_path}")
     
-    if missing:
-        _temp_logger.warning(f"ADVERTENCIA: Faltan configuraciones opcionales/requeridas: {', '.join(missing)}")
+    missing_critical = [k_env for k_env, attr_val in critical_vars_check.items() if not attr_val]
+    if missing_critical:
+        _config_module_logger.critical(f"  ¡¡VARIABLES CRÍTICAS FALTANTES!!: {', '.join(missing_critical)}")
     else:
-        _temp_logger.info("  Todas las configuraciones esenciales verificadas parecen estar presentes.")
-    _temp_logger.info("-------------------------------------")
+        _config_module_logger.info("  Verificación básica de variables críticas: OK.")
+    _config_module_logger.info("---------------------------------------------------")
 
-async def get_brand_context(brand_name_original: str) -> Optional[str]:
-    from app.main.webhook_handler import normalize_brand_name
-    s = get_settings()
-    if not s.BRANDS_DIR or not s.BRANDS_DIR.is_dir():
-        _temp_logger.error(f"Directorio BRANDS_DIR ('{s.BRANDS_DIR}') no configurado o no existe.")
-        return None
-
-    normalized_brand_for_filename = normalize_brand_name(brand_name_original)
-    normalized_filepath = s.BRANDS_DIR / f"{normalized_brand_for_filename}.txt"
-    original_filepath = s.BRANDS_DIR / f"{brand_name_original}.txt"
-
-    file_to_read = None
-    if normalized_filepath.is_file():
-        file_to_read = normalized_filepath
-    elif original_filepath.is_file():
-        _temp_logger.debug(f"Archivo normalizado no encontrado, usando nombre original: {original_filepath.name}")
-        file_to_read = original_filepath
-    else:
-        _temp_logger.warning(f"Archivo contexto no encontrado para '{brand_name_original}'. Probados: '{normalized_filepath.name}', '{original_filepath.name}'.")
-        return None
-
-    try:
-        async with aiofiles.open(file_to_read, mode='r', encoding='utf-8') as f:
-            content = await f.read()
-        content = content.strip()
-        if not content:
-            _temp_logger.warning(f"Archivo contexto para '{brand_name_original}' ('{file_to_read.name}') vacío.")
-            return None
-        _temp_logger.debug(f"Contexto cargado para '{brand_name_original}' desde '{file_to_read.name}'.")
-        return content
-    except Exception as file_err:
-        _temp_logger.error(f"Error leyendo archivo contexto '{brand_name_original}' en '{file_to_read.name}': {file_err}", exc_info=True)
-        return None
-
+# --- Instancia Global de Settings ---
+# Se crea una vez cuando este módulo es importado por primera vez.
+# Si falla aquí, la aplicación no debería arrancar.
 try:
     settings = get_settings()
-except RuntimeError as e_init:
-    _temp_logger.critical(f"FALLO CRÍTICO AL INICIALIZAR 'settings' en config.py (nivel de módulo): {e_init}")
-    settings = None
+except RuntimeError as e_init_module_level:
+    _config_module_logger.critical(f"FALLO CRÍTICO AL INICIALIZAR 'settings' a nivel de módulo en config.py: {e_init_module_level}")
+    # En un escenario real, podrías querer que la app falle completamente aquí.
+    # Para permitir que otros módulos importen 'settings' aunque sea None:
+    settings = None 

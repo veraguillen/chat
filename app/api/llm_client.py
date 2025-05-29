@@ -1,47 +1,60 @@
-# app/api/llm_client.py
-# Cliente para interactuar con modelos LLM a través de OpenRouter.
-
 import httpx
-import json # Para loggear el payload
-from app.core.config import settings # Importar la instancia de settings
+import json
+from app.core.config import settings
 from app.utils.logger import logger 
 from typing import Optional, List, Dict, Any
+from urllib.parse import urlparse
 
-# --- Configuración del Cliente HTTP para OpenRouter ---
+# --- Constants ---
+DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_TIMEOUT = 30.0
+CHAT_COMPLETIONS_PATH = "/chat/completions"
 
-# La URL base de la API de OpenRouter. El endpoint específico se añadirá en la llamada post.
-_BASE_URL_OPENROUTER_API = "https://openrouter.ai/api/v1" # Default, debería ser cargado de settings
-if settings and hasattr(settings, 'OPENROUTER_CHAT_ENDPOINT') and settings.OPENROUTER_CHAT_ENDPOINT:
-    # Asegurarse que OPENROUTER_CHAT_ENDPOINT en settings sea la URL base, no el endpoint completo de chat.
-    # Ejemplo: "https://openrouter.ai/api/v1"
-    if "/chat/completions" in settings.OPENROUTER_CHAT_ENDPOINT:
-        logger.warning(f"OPENROUTER_CHAT_ENDPOINT ('{settings.OPENROUTER_CHAT_ENDPOINT}') parece ser el endpoint completo de chat. "
-                       f"Se recomienda que sea solo la URL base de la API (ej. https://openrouter.ai/api/v1). "
-                       f"Se usará la parte base: {settings.OPENROUTER_CHAT_ENDPOINT.split('/chat/completions')[0]}")
-        _BASE_URL_OPENROUTER_API = settings.OPENROUTER_CHAT_ENDPOINT.split('/chat/completions')[0]
-        if not _BASE_URL_OPENROUTER_API.endswith("/v1"): # Asegurar que termine en /v1 si se cortó
-             _BASE_URL_OPENROUTER_API = "https://openrouter.ai/api/v1" # Fallback
-    else:
-        _BASE_URL_OPENROUTER_API = settings.OPENROUTER_CHAT_ENDPOINT
-else:
-    logger.warning(f"OPENROUTER_CHAT_ENDPOINT no encontrado en settings. Usando fallback para URL base: {_BASE_URL_OPENROUTER_API}.")
+def get_base_url() -> str:
+    """Get and validate the OpenRouter base URL from settings."""
+    if not settings or not hasattr(settings, 'OPENROUTER_CHAT_ENDPOINT'):
+        logger.warning(f"OPENROUTER_CHAT_ENDPOINT no encontrado. Usando default: {DEFAULT_BASE_URL}")
+        return DEFAULT_BASE_URL
+    
+    # Convert Pydantic HttpUrl to string if needed
+    base_url = str(settings.OPENROUTER_CHAT_ENDPOINT)
+    
+    # Remove /chat/completions if present
+    if "/chat/completions" in base_url:
+        logger.warning(
+            f"OPENROUTER_CHAT_ENDPOINT ('{base_url}') contiene endpoint completo. "
+            "Se usará solo la URL base."
+        )
+        base_url = base_url.split('/chat/completions')[0]
+    
+    # Validate URL format
+    try:
+        parsed = urlparse(base_url)
+        if not all([parsed.scheme, parsed.netloc]):
+            raise ValueError("URL inválida")
+        return base_url
+    except Exception as e:
+        logger.error(f"URL base inválida ({base_url}): {e}")
+        return DEFAULT_BASE_URL
 
-_TIMEOUT_LLM = 30.0 # Fallback
-if settings and hasattr(settings, 'http_client_timeout'):
-    _TIMEOUT_LLM = settings.http_client_timeout
-
-# Path específico para el endpoint de chat completions
-_OPENROUTER_CHAT_PATH = "/chat/completions"
-
+# --- Client Initialization ---
 try:
+    _BASE_URL_OPENROUTER_API = get_base_url()
+    _TIMEOUT_LLM = getattr(settings, 'http_client_timeout', DEFAULT_TIMEOUT)
+
     client = httpx.AsyncClient(
-        base_url=_BASE_URL_OPENROUTER_API, # ej. "https://openrouter.ai/api/v1"
-        timeout=_TIMEOUT_LLM
+        base_url=str(_BASE_URL_OPENROUTER_API),
+        timeout=float(_TIMEOUT_LLM)
     )
-    logger.info(f"Cliente HTTP para LLM (OpenRouter) inicializado. Base URL: {_BASE_URL_OPENROUTER_API}, Timeout: {_TIMEOUT_LLM}s")
+    logger.info(
+        f"Cliente HTTP para LLM inicializado. "
+        f"Base URL: {_BASE_URL_OPENROUTER_API}, "
+        f"Timeout: {_TIMEOUT_LLM}s"
+    )
 except Exception as e_client:
-    logger.error(f"Error al inicializar el cliente HTTP para LLM (OpenRouter): {e_client}", exc_info=True)
+    logger.error(f"Error inicializando cliente HTTP: {e_client}", exc_info=True)
     client = None
+
 
 
 async def get_llm_response(prompt_from_builder: str) -> Optional[str]:
@@ -114,6 +127,9 @@ async def get_llm_response(prompt_from_builder: str) -> Optional[str]:
         "temperature": llm_temperature,
         "stream": False
     }
+
+    # Definir el path del endpoint de chat
+    _OPENROUTER_CHAT_PATH = CHAT_COMPLETIONS_PATH
 
     # La URL completa será _BASE_URL_OPENROUTER_API + _OPENROUTER_CHAT_PATH
     logger.info(f"Enviando solicitud a OpenRouter. Modelo: {model_identifier}, Endpoint Path: {_OPENROUTER_CHAT_PATH}")
