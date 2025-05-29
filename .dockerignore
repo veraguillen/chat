@@ -1,0 +1,13 @@
+.git
+.vercel
+__pycache__
+*.py[cod]
+*$py.class
+.Python
+.venv
+.env
+env/
+venv/
+ENV/
+*.log
+.DS_Store

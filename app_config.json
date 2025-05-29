@@ -1,0 +1,19 @@
+{
+  "api_version": "1.0.0",
+  "deployment": {
+    "vercel": {
+      "api_gateway": true,
+      "supports_ml": false
+    },
+    "main_server": {
+      "enabled": false,
+      "url": "",
+      "supports_ml": true
+    }
+  },
+  "endpoints": {
+    "webhook": "/api/webhook",
+    "health": "/api/health",
+    "config": "/api/config"
+  }
+}

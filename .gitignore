@@ -34,6 +34,7 @@ build/
 .DS_Store
 Thumbs.db
 
+<<<<<<< HEAD
 .qodo
 # Python
 __pycache__/
@@ -76,3 +77,8 @@ logs/
 # Project specific
 data/faiss_index_kb_spanish_v1/
 chatbot.log
+=======
+.qodo
+
+.vercel
+>>>>>>> febb3041ee6c59b4cf7ca3aa7f3639798606a739
