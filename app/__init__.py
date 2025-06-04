@@ -1,158 +1,156 @@
 # app/__init__.py
-
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+import sys
+import logging 
+import asyncio # <--- IMPORTACIÓN AÑADIDA
 from contextlib import asynccontextmanager
-from typing import Any 
-import os # Mover import os aquí si se usa en el endpoint raíz
-import sys # Para sys.exit
+from fastapi import FastAPI, Request
 from datetime import datetime, timezone
 
-# 1. Importar configuración y logger PRIMERO
+# --- 1. Carga de Configuración (settings) ---
 try:
     from app.core.config import settings
-    from app.utils.logger import logger # Asumiendo que este es tu logger configurado
-    CONFIG_OK = True if settings else False
-    if not CONFIG_OK:
-        # Loguear usando print porque el logger podría no estar listo
-        print("ERROR CRÍTICO [__init__.py]: El objeto 'settings' no se inicializó correctamente en config.py.")
-        sys.exit(1) # Salir si la configuración es crítica
-except ImportError as e:
-    import logging # Fallback logging si todo lo demás falla
-    logging.basicConfig(level=logging.CRITICAL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    logging.critical(f"ERROR CRÍTICO [__init__.py]: No se pudo importar 'settings' o 'logger': {e}. La aplicación no puede continuar.")
-    sys.exit(1)
-except Exception as e_cfg:
-    # Captura otros errores durante la carga de settings (settings ya debería loguear esto)
-    # logger.error(f"ERROR CRÍTICO [__init__.py]: Excepción inesperada al cargar settings: {e_cfg}", exc_info=True)
-    print(f"ERROR CRÍTICO [__init__.py]: Excepción inesperada al cargar settings: {e_cfg}") # Usar print si logger no está
-    sys.exit(1)
+    if settings is None: 
+        raise RuntimeError("La instancia 'settings' es None después de importar desde app.core.config.")
+    CONFIG_LOADED_SUCCESSFULLY = True
+    # Usar print aquí es más seguro antes de que el logger principal esté configurado
+    print(f"DEBUG PRINT [app/__init__.py]: 'settings' importado. PROJECT_NAME: {getattr(settings, 'PROJECT_NAME', 'ERROR AL LEER SETTINGS')}")
+except Exception as e_cfg_init:
+    emergency_logger_init = logging.getLogger("APP_INIT_SETTINGS_FAILURE")
+    if not emergency_logger_init.hasHandlers():
+        _h_emerg = logging.StreamHandler(sys.stderr)
+        _f_emerg = logging.Formatter('%(asctime)s - %(name)s - CRITICAL - [%(filename)s:%(lineno)d] - %(message)s')
+        _h_emerg.setFormatter(_f_emerg); emergency_logger_init.addHandler(_h_emerg); emergency_logger_init.setLevel(logging.CRITICAL)
+    emergency_logger_init.critical(f"FALLO CRÍTICO AL CARGAR 'settings' EN app/__init__.py: {e_cfg_init}", exc_info=True)
+    print(f"ERROR CRÍTICO [app/__init__.py]: Falló la importación/creación de 'settings': {e_cfg_init}", file=sys.stderr)
+    settings = None 
+    CONFIG_LOADED_SUCCESSFULLY = False
+    sys.exit("Error crítico: Fallo al cargar la configuración. La aplicación no puede continuar.")
 
+# --- 2. Configuración del Logger Principal de la Aplicación ---
+logger: logging.Logger 
+if CONFIG_LOADED_SUCCESSFULLY and settings:
+    try:
+        from app.utils.logger import setup_logging, logger as main_app_logger
+        setup_logging(settings) 
+        logger = main_app_logger 
+        logger.info(f"Logger principal '{logger.name}' configurado desde app/__init__.py. Nivel efectivo: {logging.getLevelName(logger.getEffectiveLevel())}.")
+    except Exception as e_logger_setup:
+        logger_fallback_init = logging.getLogger("APP_INIT_LOGGER_SETUP_FALLBACK")
+        if not logger_fallback_init.hasHandlers():
+            _h_log_fall = logging.StreamHandler(sys.stdout)
+            _f_log_fall = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
+            _h_log_fall.setFormatter(_f_log_fall); logger_fallback_init.addHandler(_h_log_fall); logger_fallback_init.setLevel(logging.INFO)
+        logger = logger_fallback_init
+        logger.error(f"Error configurando el logger principal desde app.utils.logger: {e_logger_setup}. Usando logger de fallback.", exc_info=True)
+else:
+    logger = logging.getLogger("APP_INIT_NO_SETTINGS_FOR_LOGGER")
+    if not logger.hasHandlers():
+        _h_no_set = logging.StreamHandler(sys.stdout)
+        _f_no_set = logging.Formatter('%(asctime)s - %(name)s - CRITICAL - [%(filename)s:%(lineno)d] - %(message)s')
+        _h_no_set.setFormatter(_f_no_set); logger.addHandler(_h_no_set); logger.setLevel(logging.CRITICAL)
+    logger.critical("Settings no disponibles, el logger principal no pudo ser configurado con settings.")
 
-# 2. Importar funciones de inicialización/cierre de recursos
-DB_FUNCS_OK = False
-try:
-    from app.core.database import initialize_database, close_database_connection
-    DB_FUNCS_OK = True
-except ImportError:
-    logger.warning("Funciones initialize_database/close_database_connection no encontradas. La funcionalidad de DB estará deshabilitada.")
-    async def initialize_database(): logger.error("Dummy: initialize_database no disponible."); return False
-    async def close_database_connection(): pass
+# --- 3. Resto de Importaciones y Definición de la App ---
+# Importar módulos que podrían usar 'logger' o 'settings' DESPUÉS de que estén listos.
+# from .core import database as db_module # Importar el módulo completo para el chequeo de AsyncSessionLocal
+from .core.database import initialize_database, close_database_engine, AsyncSessionLocal # Importar AsyncSessionLocal para el chequeo
+from .ai.rag_retriever import load_rag_components, LANGCHAIN_OK
+from .main.routes import router as main_routes_router
+# from .api import router as general_api_router # Comentado para simplificar arranque
 
-RAG_LOADER_OK = False
-try:
-    from app.ai.rag_retriever import load_rag_components
-    RAG_LOADER_OK = True
-except ImportError:
-    logger.warning("Función load_rag_components no encontrada. La funcionalidad RAG estará deshabilitada.")
-    def load_rag_components(): logger.error("Dummy: load_rag_components no disponible."); return None
-
-# 3. Importar el router principal
-ROUTER_OK = False
-try:
-    from app.main.routes import router as main_router
-    ROUTER_OK = True
-except ImportError as e:
-     logger.error(f"Error importando main_router desde app.main.routes: {e}", exc_info=True)
-except Exception as e_router:
-     logger.error(f"Excepción inesperada importando main_router: {e_router}", exc_info=True)
-
-
-# --- Definición del Lifespan ---
 @asynccontextmanager
-async def lifespan(app_instance: FastAPI): # Cambiado 'app' a 'app_instance' para evitar shadowing
-    """Gestiona el inicio y cierre de recursos (DB, RAG)."""
-    logger.info(f"{'='*10} Iniciando Aplicación FastAPI (Lifespan) {'='*10}")
+async def lifespan(app_instance: FastAPI):
+    logger.info(f"{'='*10} LIFESPAN: Iniciando Aplicación FastAPI {'='*10}")
+    app_instance.state.db_ready = False
     app_instance.state.retriever = None
     app_instance.state.is_rag_ready = False
-    app_instance.state.is_db_ready = False
 
-    if DB_FUNCS_OK:
-        logger.info("Lifespan: Intentando inicializar la base de datos...")
-        db_initialized_ok = await initialize_database()
-        if db_initialized_ok:
-            logger.info("Lifespan: Conexión a base de datos inicializada.")
-            app_instance.state.is_db_ready = True
-        else:
-            logger.critical("Lifespan: FALLO CRÍTICO en la inicialización de la base de datos.")
-    else:
-        logger.error("Lifespan: initialize_database no disponible.")
-
-    if RAG_LOADER_OK:
-        logger.info("Lifespan: Intentando cargar componentes RAG...")
+    if settings:
+        logger.info("LIFESPAN: Intentando inicializar la base de datos...")
         try:
-            loaded_retriever: Any = load_rag_components() # Esta es una llamada síncrona
-            if loaded_retriever:
-                app_instance.state.retriever = loaded_retriever
-                app_instance.state.is_rag_ready = True
-                logger.info("Lifespan: Componentes RAG cargados y retriever guardado en app.state.")
+            db_ok = await initialize_database()
+            # Verificar AsyncSessionLocal DESPUÉS de llamar a initialize_database
+            # Importar database de nuevo aquí para asegurar que vemos la variable global actualizada
+            from .core import database as db_module_lifespan 
+            if db_ok and db_module_lifespan.AsyncSessionLocal is not None:
+                app_instance.state.is_db_ready = True
+                logger.info("LIFESPAN: Base de datos inicializada y db_module_lifespan.AsyncSessionLocal está configurado.")
+            elif db_ok and db_module_lifespan.AsyncSessionLocal is None:
+                app_instance.state.is_db_ready = False
+                logger.critical("LIFESPAN CRITICAL POST-DB-INIT: db_module_lifespan.AsyncSessionLocal SIGUE SIENDO None!")
             else:
-                logger.warning("Lifespan: FALLO AL CARGAR COMPONENTES RAG (load_rag_components devolvió None).")
-        except Exception as rag_load_err:
-             logger.error(f"Lifespan: Excepción al llamar a load_rag_components: {rag_load_err}", exc_info=True)
+                app_instance.state.is_db_ready = False
+                logger.error("LIFESPAN: FALLO en inicialización de BD (initialize_database devolvió False).")
+        except Exception as e_db:
+            app_instance.state.is_db_ready = False
+            logger.critical(f"LIFESPAN: EXCEPCIÓN CRÍTICA durante initialize_database: {e_db}", exc_info=True)
+
+        if LANGCHAIN_OK:
+            logger.info("LIFESPAN: Intentando cargar componentes RAG (Langchain OK)...")
+            try:
+                loaded_retriever: Any = await asyncio.to_thread(load_rag_components) # asyncio ya está importado
+                if loaded_retriever:
+                    app_instance.state.retriever = loaded_retriever
+                    app_instance.state.is_rag_ready = True
+                    logger.info("LIFESPAN: Componentes RAG cargados exitosamente.")
+                else:
+                    app_instance.state.is_rag_ready = False
+                    logger.warning("LIFESPAN: load_rag_components devolvió None. RAG no funcional.")
+            except Exception as e_rag:
+                app_instance.state.is_rag_ready = False
+                logger.error(f"LIFESPAN: EXCEPCIÓN al cargar componentes RAG: {e_rag}", exc_info=True)
+        else:
+            logger.warning("LIFESPAN: Langchain no disponible. Componentes RAG no se cargarán.")
+            app_instance.state.is_rag_ready = False
     else:
-         logger.warning("Lifespan: load_rag_components no disponible.")
+        logger.critical("LIFESPAN: 'settings' no está disponible. Saltando inicialización de DB y RAG.")
 
     ready_msg = f"DB Lista: {app_instance.state.is_db_ready}, RAG Listo: {app_instance.state.is_rag_ready}"
-    logger.info(f"{'='*10} Aplicación Lista para servir ({ready_msg}) {'='*10}")
+    logger.info(f"{'='*10} LIFESPAN: Aplicación Lista para servir ({ready_msg}) {'='*10}")
     yield 
+    logger.info(f"{'='*10} LIFESPAN: Apagando Aplicación FastAPI {'='*10}")
+    if app_instance.state.is_db_ready and callable(close_database_engine):
+        try: await close_database_engine()
+        except Exception as e: logger.error(f"LIFESPAN: Excepción en close_database_engine: {e}", exc_info=True)
+    app_instance.state.retriever = None 
+    logger.info("LIFESPAN: Recursos limpiados. Apagado completado.")
 
-    logger.info(f"{'='*10} Apagando Aplicación FastAPI (Lifespan) {'='*10}")
-    if DB_FUNCS_OK and callable(close_database_connection):
-        await close_database_connection()
-    app_instance.state.retriever = None # Limpiar estado
-    logger.info("Lifespan: Recursos limpiados. Apagado completado.")
-# --- FIN Lifespan ---
-
-
-# --- Crear la Instancia ÚNICA de la App FastAPI ---
-# settings ya fue verificado al inicio del archivo
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    description="API para procesar mensajes de WhatsApp/Messenger con estado, RAG y Calendly.",
-    version=settings.VERSION,
-    lifespan=lifespan # Asociar el lifespan
-)
-# -----------------------------------------
-
-# --- Configuración CORS ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_credentials=True,
-    allow_methods=["GET", "POST"],
-    allow_headers=["*"], 
-)
-logger.info("Middleware CORS configurado (permitiendo todos los orígenes para desarrollo).")
-# ---------------------------
-
-# --- Incluir Routers ---
-if ROUTER_OK and main_router: # Añadido check para main_router
-    app.include_router(main_router)
-    logger.info("Router principal (app.main.routes) incluido.")
+# --- Creación de la Instancia FastAPI ---
+if not (CONFIG_LOADED_SUCCESSFULLY and settings):
+    logger.critical("FALLO CATASTRÓFICO: No se puede crear instancia FastAPI, 'settings' no disponible.")
+    app = None # type: ignore 
 else:
-    logger.critical("Router principal no se pudo importar o no está definido. La API no tendrá endpoints /webhook funcionales.")
-# ----------------------
+    app = FastAPI(
+        title=settings.PROJECT_NAME,
+        version=settings.PROJECT_VERSION,
+        lifespan=lifespan
+    )
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+    
+    try:
+        app.include_router(main_routes_router)
+        logger.info("Router principal (main_routes_router) incluido.")
+        # Si tienes un router para /api y lo necesitas, descomenta y asegúrate que app.api.__init__.py defina 'router'
+        # from .api import router as general_api_router
+        # app.include_router(general_api_router, prefix="/api") 
+        # logger.info("Router general_api_router incluido con prefijo /api.")
+    except Exception as e_router_final:
+        logger.critical(f"Error al incluir routers en la instancia FastAPI: {e_router_final}", exc_info=True)
 
-# --- Ruta Raíz (Status Check) ---
-@app.get("/", tags=["Status"], summary="Verifica el estado de la API y sus componentes")
-async def root(request: Request):
-    """Devuelve el estado básico de la API, DB y RAG."""
-    is_rag_ready = getattr(request.app.state, 'is_rag_ready', False)
-    is_db_ready = getattr(request.app.state, 'is_db_ready', False)
-    rag_status = "listo" if is_rag_ready else "no_disponible_o_fallo"
-    db_status = "conectada" if is_db_ready else "fallo_inicializacion_o_no_disponible"
-    project_name = getattr(settings, 'PROJECT_NAME', 'Chatbot API')
-    project_version = getattr(settings, 'VERSION', 'N/A')
+    @app.get("/", tags=["Status"], include_in_schema=False)
+    async def root_status_endpoint(request: Request):
+        db_s = getattr(request.app.state, 'is_db_ready', "desconocido")
+        rag_s = getattr(request.app.state, 'is_rag_ready', "desconocido")
+        logger.debug("Acceso a endpoint raíz '/' para estado.")
+        return {
+            "project": settings.PROJECT_NAME, "version": settings.PROJECT_VERSION,
+            "status_message": "Servicio Activo",
+            "database_status": "lista" if db_s is True else "no_lista" if db_s is False else db_s,
+            "rag_status": "listo" if rag_s is True else "no_listo" if rag_s is False else rag_s,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat()
+        }
+    logger.info(f"Instancia FastAPI '{settings.PROJECT_NAME}' v{settings.PROJECT_VERSION} creada y configurada. LOG_LEVEL app: {settings.LOG_LEVEL}.")
 
-    logger.debug("Accediendo a endpoint raíz '/'") # Log para saber que se accede
-    return {
-        "status": "ok",
-        "message": f"Bienvenido a {project_name} v{project_version}",
-        "database_status": db_status,
-        "rag_status": rag_status,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat() # Añadir timestamp
-    }
-# -----------------------------
-
-logger.info(f"Instancia FastAPI '{settings.PROJECT_NAME}' creada y configurada en app/__init__.py.")
+if app is None and __name__ == "__main__":
+    print("ERROR CRÍTICO: La instancia 'app' de FastAPI es None. No se puede iniciar.", file=sys.stderr)

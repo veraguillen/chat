@@ -8,6 +8,7 @@ from datetime import datetime, date, timedelta, timezone
 import app.utils.validation_utils as local_validators # Para is_valid_email
 import locale
 import urllib.parse
+from fastapi import APIRouter
 
 # --- Configuración de Locale ---
 try:
@@ -48,10 +49,10 @@ else:
     logger.error("Settings no disponibles, no se pudo inicializar cliente HTTP de Calendly.")
 
 async def _get_calendly_headers() -> Optional[Dict[str, str]]:
-    if not settings or not settings.calendly_api_key:
+    if not settings or not settings.CALENDLY_API_KEY:
         logger.error("CALENDLY_API_KEY no configurada en settings.")
         return None
-    return {'Authorization': f'Bearer {settings.calendly_api_key}', 'Content-Type': 'application/json'}
+    return {'Authorization': f'Bearer {settings.CALENDLY_API_KEY}', 'Content-Type': 'application/json'}
 
 async def get_event_type_details(event_type_absolute_uri: str) -> Optional[Dict[str, Any]]:
     """Obtiene detalles de un tipo de evento usando su URI absoluta."""
@@ -96,13 +97,13 @@ async def get_available_slots(
         return None
 
     effective_start_date = start_date_obj if start_date_obj is not None else date.today()
-    days_to_check = settings.calendly_days_to_check if settings and hasattr(settings, 'calendly_days_to_check') and isinstance(settings.calendly_days_to_check, int) else 7
+    days_to_check = settings.CALENDLY_DAYS_TO_CHECK if settings and hasattr(settings, 'calendly_days_to_check') and isinstance(settings.CALENDLY_DAYS_TO_CHECK, int) else 7
     effective_end_date = end_date_obj if end_date_obj is not None else effective_start_date + timedelta(days=days_to_check)
 
     start_time_param = datetime.combine(effective_start_date, datetime.min.time()).isoformat(timespec='seconds')
     end_time_param = datetime.combine(effective_end_date, datetime.max.time()).isoformat(timespec='seconds')
     
-    invitee_target_timezone = settings.calendly_timezone if settings and settings.calendly_timezone else "America/Mexico_City"
+    invitee_target_timezone = getattr(settings, "CALENDLY_TIMEZONE", "America/Mexico_City") or "America/Mexico_City"
 
     api_url_path = "/event_type_available_times" 
     params = {
@@ -155,7 +156,7 @@ async def get_scheduling_link(
     
     if not event_type_uri_from_settings:
         logger.error("get_scheduling_link: event_type_uri_from_settings no fue proporcionada.")
-        return f"https://calendly.com/{settings.calendly_user_slug if settings and settings.calendly_user_slug else 'tu-usuario'}/#error-no-event-uri"
+        return f"https://calendly.com/{settings.CALENDLY_USER_SLUG if settings and settings.CALENDLY_USER_SLUG else 'tu-usuario'}/#error-no-event-uri"
 
     event_details = await get_event_type_details(event_type_uri_from_settings)
     
@@ -165,8 +166,8 @@ async def get_scheduling_link(
     else:
         logger.error(f"No se pudo obtener scheduling_url base para: {event_type_uri_from_settings}")
         user_slug = "tu_usuario_calendly" 
-        if settings and hasattr(settings, 'calendly_user_slug') and settings.calendly_user_slug:
-            user_slug = settings.calendly_user_slug
+        if settings and hasattr(settings, 'CALENDLY_USER_SLUG') and settings.CALENDLY_USER_SLUG:
+            user_slug = settings.CALENDLY_USER_SLUG
         try: event_slug_from_uri = event_type_uri_from_settings.split('/')[-1]; event_slug_from_uri = event_slug_from_uri.split('?')[0]
         except: event_slug_from_uri = "evento-generico"
         logger.warning(f"Usando enlace de fallback. User: {user_slug}, Event Slug (inferido): {event_slug_from_uri}")
@@ -178,9 +179,9 @@ async def get_scheduling_link(
     if name and name.strip(): params_for_link["name"] = name.strip()
     if email and local_validators.is_valid_email(email): params_for_link["email"] = email.strip()
     
-    if settings and settings.calendly_timezone:
-        params_for_link["timezone"] = settings.calendly_timezone
-        logger.debug(f"Añadiendo timezone='{settings.calendly_timezone}' al enlace de Calendly.")
+    if settings and getattr(settings, "CALENDLY_TIMEZONE", None):
+        params_for_link["timezone"] = settings.CALENDLY_TIMEZONE
+        logger.debug(f"Añadiendo timezone='{settings.CALENDLY_TIMEZONE}' al enlace de Calendly.")
 
     if params_for_link:
         try:
@@ -194,3 +195,16 @@ async def get_scheduling_link(
     
     logger.info(f"Enlace de scheduling sin parámetros adicionales: {base_link}")
     return base_link
+
+# Configurar el router para los endpoints de Calendly
+router = APIRouter()
+
+@router.get("/events", tags=["calendly"])
+async def get_events():
+    """Obtener eventos de Calendly"""
+    return {"message": "Endpoint para obtener eventos de Calendly"}
+
+@router.post("/schedule", tags=["calendly"])
+async def schedule_event():
+    """Programar un nuevo evento en Calendly"""
+    return {"message": "Endpoint para programar eventos en Calendly"}

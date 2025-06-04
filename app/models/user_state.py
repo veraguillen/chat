@@ -35,6 +35,8 @@ class UserState(Base):
     
     # --- Estado del Flujo ---
     stage: Mapped[str] = mapped_column(String(100), default="selecting_brand", index=True, nullable=False)
+    # Flag para marcar si la sesión ha sido finalizada explícitamente por el usuario
+    session_explicitly_ended: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # --- Campos de Información Recolectada ---
     collected_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

@@ -1,13 +1,59 @@
+# Version control
 .git
-.vercel
-__pycache__
-*.py[cod]
-*$py.class
-.Python
-.venv
+.github
+.gitignore
+.gitattributes
+
+# Environment and IDE
 .env
+.venv
 env/
 venv/
 ENV/
-*.log
+.idea/
+.vscode/
+*.swp
+*.swo
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+logs/
+
+# Test files
+test/
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local development
+deploy.sh
+deploy_azure.ps1
+deploy_azure_fixed.ps1
+README.md
+*.md
+LICENSE
+
+# Docker specific
+Dockerfile*
+.dockerignore
+docker-compose*
+
+# Large files
+*.pkl
+*.faiss
+*.bin

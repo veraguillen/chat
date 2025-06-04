@@ -1,236 +1,350 @@
+# app/ai/rag_retriever.py
 import os
 import logging
-from pathlib import Path # Asegurar importación de Path
+from pathlib import Path 
 from typing import List, Optional, Any
 import asyncio
 
-# Langchain y FAISS imports
+# --- Importaciones de Terceros (Langchain, Azure) ---
+# Intentar importar Langchain y FAISS. Si falla, RAG no funcionará.
 try:
     from langchain_community.embeddings import HuggingFaceEmbeddings
     from langchain_community.vectorstores import FAISS
-    from langchain.schema import Document as LangchainDocument
+    from langchain_core.documents import Document as LangchainDocument
     from langchain_core.vectorstores import VectorStoreRetriever
-    LANGCHAIN_OK = True
-except ImportError:
-    logging.basicConfig(level=logging.ERROR) # Logger básico si todo lo demás falla
-    logging.error("Faltan librerías CRÍTICAS de Langchain/FAISS (langchain-huggingface, langchain-community, faiss-cpu/gpu). El sistema RAG NO funcionará.")
-    LANGCHAIN_OK = False
-    # Clases Dummy para evitar errores de NameError si las importaciones fallan
-    class HuggingFaceEmbeddings: pass
-    class FAISS: pass
-    class LangchainDocument: pass
-    class VectorStoreRetriever: pass
+    LANGCHAIN_OK = True # Variable global para indicar si Langchain está disponible
+    # print("DEBUG [rag_retriever.py]: Langchain components imported successfully.") # Para depuración muy temprana
+except ImportError as e_langchain:
+    # Configurar un logger de emergencia si el logger principal aún no está disponible
+    _emergency_logger_rag = logging.getLogger("rag_retriever_langchain_import_error")
+    if not _emergency_logger_rag.hasHandlers():
+        _h_emerg = logging.StreamHandler(sys.stderr) # type: ignore
+        _f_emerg = logging.Formatter('%(asctime)s - %(name)s - CRITICAL - %(message)s')
+        _h_emerg.setFormatter(_f_emerg); _emergency_logger_rag.addHandler(_h_emerg)
+    _emergency_logger_rag.critical(
+        f"Faltan librerías CRÍTICAS de Langchain/FAISS (Error: {e_langchain}). "
+        "El sistema RAG NO funcionará. Por favor, instala los paquetes requeridos: "
+        "'pip install langchain langchain-community faiss-cpu sentence-transformers'"
+    )
+    LANGCHAIN_OK = False # Variable global
+    
+    # Clases Dummy para evitar NameError si LANGCHAIN_OK es False y el código intenta usarlas
+    # Esto permite que el resto del módulo se importe sin errores fatales inmediatos,
+    # aunque las funciones RAG no serán operativas.
+    class HuggingFaceEmbeddings: pass # type: ignore
+    class FAISS: pass # type: ignore
+    class LangchainDocument: # type: ignore
+        def __init__(self, page_content: str, metadata: Optional[Dict[str, Any]] = None):
+            self.page_content = page_content
+            self.metadata = metadata or {}
+    class VectorStoreRetriever: pass # type: ignore
 
-# Importar settings y logger de la aplicación
-CONFIG_LOADED = False
-settings_instance = None # Renombrar para evitar conflicto con el 'settings' global de config.py
+# Azure SDKs (solo si se usan para descarga, y dentro de try-except)
 try:
-    from app.core.config import settings as app_settings # Usar un alias para la instancia importada
-    if app_settings:
-        settings_instance = app_settings # Asignar al alias local
-        CONFIG_LOADED = True
-        # Logger de la aplicación ya debería estar configurado si settings se cargó
-        logger = logging.getLogger("app.ai.rag_retriever") # Obtener el logger específico del módulo
-        logger.info("Configuración (settings) y logger principal cargados exitosamente en rag_retriever.")
-    else:
-        logger = logging.getLogger("rag_retriever_init_error")
-        logger.error("Instancia de 'settings' importada desde app.core.config es None.")
+    from azure.storage.blob import BlobServiceClient
+    from azure.identity import DefaultAzureCredential
+    AZURE_SDK_OK = True
+except ImportError:
+    # No es crítico si no se usa la descarga desde Azure o si los archivos ya están locales
+    # El logger principal (si está disponible) advertirá si se intenta la descarga sin SDK.
+    AZURE_SDK_OK = False
 
-except ImportError as e:
-    # Fallback si no se puede importar config o logger
-    logger = logging.getLogger("rag_retriever_fallback")
+
+# --- Importar settings y logger de la aplicación ---
+# Esto asume que config.py y logger.py están en paths accesibles y se cargan antes o sin problemas.
+try:
+    from app.core.config import settings # Importa la instancia 'settings' ya inicializada
+    from app.utils.logger import logger # Importa el logger principal de la app
+    CONFIG_AND_LOGGER_OK_RAG = True
+    logger.info("rag_retriever.py: Configuración (settings) y logger principal cargados.")
+except ImportError as e_cfg_log_rag:
+    # Fallback logger si el principal no está disponible
+    logger = logging.getLogger("app.ai.rag_retriever_fallback")
     if not logger.hasHandlers():
-        _h = logging.StreamHandler()
-        _f = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
-        _h.setFormatter(_f)
-        logger.addHandler(_h)
-        logger.setLevel(logging.INFO)
-    logger.error(f"Error CRÍTICO importando 'settings' o 'logger' desde app.core/app.utils: {e}. Usando fallback logger.")
-    settings_instance = None # Asegurar que es None
+        _h_fall = logging.StreamHandler(sys.stderr) # type: ignore
+        _f_fall = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s')
+        _h_fall.setFormatter(_f_fall); logger.addHandler(_h_fall); logger.setLevel(logging.INFO)
+    logger.error(f"Error CRÍTICO importando 'settings' o 'logger' principal en rag_retriever.py: {e_cfg_log_rag}. Usando fallback logger. La funcionalidad RAG puede estar comprometida.")
+    settings = None # type: ignore # Para evitar NameError si settings no se cargó
+    CONFIG_AND_LOGGER_OK_RAG = False
 
 
-def load_rag_components() -> Optional[VectorStoreRetriever]:
-    logger.info("Iniciando load_rag_components...")
-    if not LANGCHAIN_OK:
-        logger.critical("Langchain/FAISS no están disponibles (importación fallida). No se pueden cargar componentes RAG.")
-        return None
-    if not CONFIG_LOADED or not settings_instance:
-        logger.critical("Configuración (settings_instance) no disponible o no cargada. No se pueden cargar componentes RAG.")
-        return None
+def _download_faiss_files_from_azure(
+    local_index_target_folder: Path, 
+    faiss_index_filename_base: str, # Ej: "index" para "index.faiss", "index.pkl"
+    storage_account_name_cfg: Optional[str], 
+    container_name_cfg: Optional[str],
+    connection_string_cfg: Optional[str] = None
+) -> bool:
+    """Descarga los archivos .faiss y .pkl del índice desde Azure Blob Storage."""
+    
+    logger.info(f"RAG_AZURE_DOWNLOAD: Intentando descarga de índice '{faiss_index_filename_base}' desde Azure Blob.")
 
-    # --- Obtener rutas y nombres desde settings_instance ---
-    # settings_instance.faiss_folder_path ya es un objeto Path calculado en config.py
-    faiss_folder_path_obj: Path = settings_instance.faiss_folder_path
-    faiss_base_name: str = settings_instance.faiss_index_name # ej: "index"
-    embedding_model_name_from_settings: str = settings_instance.embedding_model_name
-    rag_k_default: int = settings_instance.rag_default_k
-    k_fetch_multiplier: int = settings_instance.rag_k_fetch_multiplier
-    k_to_fetch_initially = rag_k_default * k_fetch_multiplier
+    if not AZURE_SDK_OK:
+        logger.error("RAG_AZURE_DOWNLOAD: Azure SDK (azure.storage.blob, azure.identity) no disponible. No se puede descargar de Azure.")
+        return False
+    if not storage_account_name_cfg or not container_name_cfg:
+        logger.error("RAG_AZURE_DOWNLOAD: Nombre de cuenta de almacenamiento o nombre de contenedor no provistos en settings. Abortando descarga.")
+        return False
 
-    logger.info(f"  Path a la carpeta del índice FAISS (desde settings): '{faiss_folder_path_obj}'")
-    logger.info(f"  Nombre base del índice FAISS (desde settings): '{faiss_base_name}'")
-    logger.info(f"  Modelo de embeddings (desde settings): '{embedding_model_name_from_settings}'")
+    faiss_blob_name = f"{faiss_index_filename_base}.faiss"
+    pkl_blob_name = f"{faiss_index_filename_base}.pkl"
+    
+    local_faiss_file_path = local_index_target_folder / faiss_blob_name
+    local_pkl_file_path = local_index_target_folder / pkl_blob_name
 
-    if not embedding_model_name_from_settings:
-        logger.critical("  embedding_model_name no está configurado en settings.")
-        return None
-    if not faiss_folder_path_obj or not faiss_base_name:
-        logger.critical(f"  Configuración de FAISS incompleta: faiss_folder_path='{faiss_folder_path_obj}', faiss_index_name='{faiss_base_name}'.")
-        return None
-
-    embedding_model_instance: Optional[HuggingFaceEmbeddings] = None
-    vector_store_instance: Optional[FAISS] = None
+    logger.debug(f"  Target local: '{local_index_target_folder}', FAISS file: '{faiss_blob_name}', PKL file: '{pkl_blob_name}'")
 
     try:
-        # 1. Cargar Modelo de Embeddings
-        logger.info(f"  Paso 1: Cargando modelo de embeddings '{embedding_model_name_from_settings}'...")
-        device_to_use = 'cpu' # Forzar CPU para consistencia en App Service
+        blob_service_client: BlobServiceClient
+        if connection_string_cfg:
+            logger.info(f"  Autenticando en Azure Blob con CADENA DE CONEXIÓN para cuenta '{storage_account_name_cfg}'.")
+            blob_service_client = BlobServiceClient.from_connection_string(connection_string_cfg)
+        else:
+            logger.info(f"  Autenticando en Azure Blob con DefaultAzureCredential para cuenta '{storage_account_name_cfg}'.")
+            account_url = f"https://{storage_account_name_cfg}.blob.core.windows.net"
+            credential = DefaultAzureCredential(logging_enable=True) # Habilitar logging de Azure Identity
+            blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+
+        container_client = blob_service_client.get_container_client(container_name_cfg)
+        logger.info(f"  Accediendo al contenedor de Azure: '{container_name_cfg}'.")
+        
+        local_index_target_folder.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"  Directorio local para el índice asegurado: '{local_index_target_folder}'.")
+
+        # Descargar .faiss
+        logger.info(f"    Descargando blob '{faiss_blob_name}' a '{local_faiss_file_path}'...")
+        blob_client_faiss = container_client.get_blob_client(faiss_blob_name)
+        with open(local_faiss_file_path, "wb") as download_file_faiss:
+            download_stream_faiss = blob_client_faiss.download_blob(timeout=300) # Timeout 5 min
+            download_file_faiss.write(download_stream_faiss.readall())
+        logger.info(f"    '{faiss_blob_name}' descargado ({local_faiss_file_path.stat().st_size} bytes).")
+
+        # Descargar .pkl
+        logger.info(f"    Descargando blob '{pkl_blob_name}' a '{local_pkl_file_path}'...")
+        blob_client_pkl = container_client.get_blob_client(pkl_blob_name)
+        with open(local_pkl_file_path, "wb") as download_file_pkl:
+            download_stream_pkl = blob_client_pkl.download_blob(timeout=300) # Timeout 5 min
+            download_file_pkl.write(download_stream_pkl.readall())
+        logger.info(f"    '{pkl_blob_name}' descargado ({local_pkl_file_path.stat().st_size} bytes).")
+        
+        logger.info(f"RAG_AZURE_DOWNLOAD: Descarga de índice '{faiss_index_filename_base}' desde Azure completada exitosamente.")
+        return True
+
+    except Exception as e_download:
+        logger.error(f"RAG_AZURE_DOWNLOAD: Error al descargar archivos FAISS desde Azure. Cuenta: '{storage_account_name_cfg}', Contenedor: '{container_name_cfg}', Índice base: '{faiss_index_filename_base}'. Error: {e_download}", exc_info=True)
+        if local_faiss_file_path.exists(): local_faiss_file_path.unlink(missing_ok=True)
+        if local_pkl_file_path.exists(): local_pkl_file_path.unlink(missing_ok=True)
+        return False
+
+# --- ESTA ES LA FUNCIÓN QUE SE IMPORTA EN app/__init__.py ---
+def load_rag_components() -> Optional[VectorStoreRetriever]:
+    """
+    Carga los componentes RAG: modelo de embeddings y el índice vectorial FAISS.
+    Intenta cargar desde una ruta local; si no existe, intenta descargar desde Azure Blob Storage.
+    Esta función es SÍNCRONA y está pensada para ser llamada en un hilo separado si es necesario
+    durante el arranque de la aplicación (ej. con asyncio.to_thread).
+    """
+    logger.info("RAG_LOADER: Iniciando carga de componentes RAG...")
+
+    if not LANGCHAIN_OK:
+        logger.critical("RAG_LOADER: Langchain/FAISS no disponibles (LANGCHAIN_OK=False). No se pueden cargar componentes RAG.")
+        return None
+    if not CONFIG_AND_LOGGER_OK_RAG or not settings:
+        logger.critical("RAG_LOADER: Configuración (settings) o logger principal no disponibles. No se pueden cargar componentes RAG.")
+        return None
+
+    # Validar configuraciones necesarias de 'settings'
+    embedding_model = getattr(settings, 'EMBEDDING_MODEL_NAME', None)
+    faiss_index_name_base = getattr(settings, 'FAISS_INDEX_NAME', None) # ej: "index"
+    # FAISS_FOLDER_PATH es calculado en config.py: settings.DATA_DIR / settings.FAISS_FOLDER_NAME
+    # ej: /app_root/data/faiss_index_kb_spanish_v1
+    faiss_folder_full_path = getattr(settings, 'FAISS_FOLDER_PATH', None) 
+
+    # LOCAL_FAISS_CACHE_PATH es una ruta opcional para sobreescribir dónde buscar/guardar el índice localmente.
+    # Si se define, esta es la carpeta que contiene los archivos index.faiss y index.pkl.
+    # Si no, se usa faiss_folder_full_path.
+    local_index_dir_to_use: Optional[Path] = None
+    if getattr(settings, 'LOCAL_FAISS_CACHE_PATH', None) and isinstance(settings.LOCAL_FAISS_CACHE_PATH, Path):
+        local_index_dir_to_use = settings.LOCAL_FAISS_CACHE_PATH
+        logger.info(f"  Usando LOCAL_FAISS_CACHE_PATH para el índice: '{local_index_dir_to_use}'")
+    elif faiss_folder_full_path and isinstance(faiss_folder_full_path, Path):
+        local_index_dir_to_use = faiss_folder_full_path
+        logger.info(f"  LOCAL_FAISS_CACHE_PATH no definido, usando FAISS_FOLDER_PATH para el índice: '{local_index_dir_to_use}'")
+    else:
+        logger.critical("  Ruta del índice FAISS (FAISS_FOLDER_PATH o LOCAL_FAISS_CACHE_PATH) no configurada o inválida.")
+        return None
+
+    if not embedding_model:
+        logger.critical("  EMBEDDING_MODEL_NAME no configurado en settings.")
+        return None
+    if not faiss_index_name_base:
+        logger.critical(f"  FAISS_INDEX_NAME (nombre base de los archivos .faiss/.pkl) no configurado.")
+        return None
+    
+    logger.info(f"  Directorio local objetivo para el índice '{faiss_index_name_base}': '{local_index_dir_to_use}'")
+    logger.info(f"  Modelo de embeddings a usar: '{embedding_model}'")
+
+    index_file_path = local_index_dir_to_use / f"{faiss_index_name_base}.faiss"
+    pkl_file_path = local_index_dir_to_use / f"{faiss_index_name_base}.pkl"
+    
+    # 1. Verificar si los archivos existen localmente o descargar desde Azure
+    if not (index_file_path.exists() and pkl_file_path.exists()):
+        logger.info(f"  Índice FAISS ('{index_file_path.name}', '{pkl_file_path.name}') no encontrado localmente en '{local_index_dir_to_use}'.")
+        logger.info(f"  Intentando descarga desde Azure Blob Storage...")
+        
+        azure_storage_name = getattr(settings, 'STORAGE_ACCOUNT_NAME', None)
+        azure_container = getattr(settings, 'CONTAINER_NAME', None)
+        azure_conn_str = getattr(settings, 'AZURE_STORAGE_CONNECTION_STRING', None)
+
+        download_successful = _download_faiss_files_from_azure(
+            local_index_target_folder=local_index_dir_to_use, # Carpeta donde se guardarán
+            faiss_index_filename_base=faiss_index_name_base, # Nombre base, ej "index"
+            storage_account_name_cfg=azure_storage_name,
+            container_name_cfg=azure_container,
+            connection_string_cfg=azure_conn_str
+        )
+        if not download_successful:
+            logger.error("  Fallo al descargar el índice FAISS desde Azure. RAG no estará disponible.")
+            return None
+    else:
+        logger.info(f"  Índice FAISS encontrado localmente en '{local_index_dir_to_use}'. Saltando descarga.")
+
+    # 2. Cargar embeddings y el índice FAISS desde la ruta local
+    try:
+        logger.info(f"  Cargando modelo de embeddings: '{embedding_model}'...")
+        # Podrías añadir un cache_folder para los embeddings si es necesario y no está configurado globalmente por transformers
+        # embeddings_cache_dir = settings.BASE_DIR / ".cache" / "embeddings_hf"
+        # embeddings_cache_dir.mkdir(parents=True, exist_ok=True)
         embedding_model_instance = HuggingFaceEmbeddings(
-            model_name=embedding_model_name_from_settings,
-            model_kwargs={'device': device_to_use},
+            model_name=embedding_model,
+            model_kwargs={'device': 'cpu'}, # Forzar CPU para consistencia
+            # cache_folder=str(embeddings_cache_dir) # Opcional
         )
-        logger.info(f"  Modelo de embeddings '{embedding_model_name_from_settings}' inicializado en dispositivo '{device_to_use}'.")
+        logger.info("  Modelo de embeddings cargado exitosamente.")
 
-        # 2. Verificar y Cargar Índice FAISS
-        logger.info(f"  Paso 2: Verificando y cargando índice FAISS desde '{faiss_folder_path_obj}' con nombre base '{faiss_base_name}'...")
-        
-        if not faiss_folder_path_obj.is_dir():
-            logger.critical(f"  ERROR: El directorio del índice FAISS NO EXISTE: {faiss_folder_path_obj}")
-            return None
-        
-        expected_faiss_file = faiss_folder_path_obj / f"{faiss_base_name}.faiss"
-        expected_pkl_file = faiss_folder_path_obj / f"{faiss_base_name}.pkl"
-
-        if not expected_faiss_file.is_file():
-            logger.critical(f"  ERROR: Archivo '{expected_faiss_file.name}' NO ENCONTRADO en: {faiss_folder_path_obj}")
-            return None
-        if not expected_pkl_file.is_file():
-            logger.critical(f"  ERROR: Archivo '{expected_pkl_file.name}' NO ENCONTRADO en: {faiss_folder_path_obj}")
-            return None
-            
-        logger.info(f"  Archivos de índice (.faiss y .pkl) encontrados. Procediendo a cargar con FAISS.load_local...")
+        logger.info(f"  Cargando índice FAISS desde '{local_index_dir_to_use}' (nombre base del índice: '{faiss_index_name_base}')...")
         vector_store_instance = FAISS.load_local(
-            folder_path=str(faiss_folder_path_obj), # IMPORTANTE: load_local espera un string para folder_path
-            index_name=faiss_base_name, # Nombre base de los archivos (sin extensión)
+            folder_path=str(local_index_dir_to_use), # Debe ser string
             embeddings=embedding_model_instance,
-            allow_dangerous_deserialization=True # Necesario si el .pkl fue guardado por Langchain
+            index_name=faiss_index_name_base, # Importante: nombre base de los archivos .faiss y .pkl
+            allow_dangerous_deserialization=True # Necesario para índices creados con algunas versiones de Langchain/FAISS
         )
-        logger.info(f"  Índice FAISS '{faiss_base_name}' cargado exitosamente desde '{faiss_folder_path_obj}'.")
+        logger.info(f"  Índice FAISS '{faiss_index_name_base}' cargado exitosamente desde '{local_index_dir_to_use}'.")
         
         if hasattr(vector_store_instance, 'index') and vector_store_instance.index:
-             logger.info(f"  Número total de vectores en el índice cargado: {vector_store_instance.index.ntotal}")
+             logger.info(f"    Verificación: Número total de vectores en el índice FAISS cargado: {vector_store_instance.index.ntotal}")
         else:
-            # Esto sería muy inusual si FAISS.load_local no lanzó error, pero por si acaso.
-            logger.warning("  El índice FAISS se cargó, pero el objeto 'index' interno no está disponible o es None.")
-
+            logger.warning("    Advertencia: El índice FAISS se cargó, pero el objeto 'index' interno no está disponible o es None.")
 
         # 3. Crear y Devolver el Retriever
-        logger.info(f"  Paso 3: Creando retriever FAISS...")
+        rag_k_default = getattr(settings, 'RAG_DEFAULT_K', 3)
+        rag_k_mult = getattr(settings, 'RAG_K_FETCH_MULTIPLIER', 4)  # Aumentado de 2 a 4 para obtener más documentos
+        k_for_retriever_search = rag_k_default * rag_k_mult
+        
+        logger.info(f"  Creando retriever FAISS. Tipo de búsqueda: 'similarity', k para search_kwargs: {k_for_retriever_search}.")
         retriever_instance = vector_store_instance.as_retriever(
-            search_type="similarity", # Otras opciones: "mmr", "similarity_score_threshold"
-            search_kwargs={'k': k_to_fetch_initially}
+            search_type="similarity", 
+            search_kwargs={'k': k_for_retriever_search}
         )
-        logger.info(f"  Retriever FAISS creado exitosamente. k (búsqueda inicial) = {k_to_fetch_initially}.")
-        logger.info("Componentes RAG cargados exitosamente.")
+        logger.info("  Retriever FAISS creado exitosamente.")
+        logger.info("RAG_LOADER: ¡Componentes RAG (embeddings, vector store, retriever) cargados y listos!")
         return retriever_instance
-
-    except ImportError as e_imp: # Debería ser capturado por LANGCHAIN_OK, pero como doble check.
-        logger.critical(f"Error de importación tardío (inesperado) al cargar componentes RAG: {e_imp}", exc_info=True)
+        
+    except Exception as e_load_local:
+        logger.error(f"RAG_LOADER: Error CRÍTICO durante la carga local de embeddings o el índice FAISS desde '{local_index_dir_to_use}': {e_load_local}", exc_info=True)
         return None
-    except FileNotFoundError as e_fnf: # Ahora menos probable con los checks explícitos de is_dir/is_file.
-        logger.critical(f"No se encontró archivo/directorio FAISS (inesperado después de los checks de existencia): {e_fnf}", exc_info=True)
-        return None
-    except RuntimeError as e_rt: # Errores de FAISS al cargar, etc.
-        if "could not open" in str(e_rt).lower() and ".faiss" in str(e_rt).lower():
-            logger.critical(f"Error FAISS específico: No se pudo abrir el archivo '{faiss_base_name}.faiss' en '{faiss_folder_path_obj}'. ¿Corrupto o problema de permisos?", exc_info=False)
-        else:
-            logger.critical(f"RuntimeError inesperado al cargar componentes RAG: {e_rt}", exc_info=True)
-        return None
-    except Exception as e:
-        logger.critical(f"Error CRÍTICO y GENERAL al cargar componentes RAG: {e}", exc_info=True)
-        return None
-
-# ... (El resto de tu función search_relevant_documents se mantiene igual, pero asegúrate de que usa settings_instance en lugar de settings global si es necesario)
-# Por ejemplo, dentro de search_relevant_documents:
-# final_k_to_return = k_final if k_final is not None else (settings_instance.rag_default_k if settings_instance else 3)
 
 async def search_relevant_documents(
-    retriever_instance: VectorStoreRetriever,
+    retriever_instance: VectorStoreRetriever, # Este es el objeto devuelto por load_rag_components
     user_query: str,
-    target_brand: Optional[str] = None,
-    k_final: Optional[int] = None
+    target_brand: Optional[str] = None, # Nombre normalizado de la marca para filtrar
+    k_final: Optional[int] = None       # Número final de documentos a devolver
 ) -> List[LangchainDocument]:
+    """
+    Busca documentos relevantes usando el retriever y opcionalmente filtra por marca.
+    """
+    logger.debug(f"RAG_SEARCH: Iniciando búsqueda. Query (preview): '{user_query[:70]}...', Marca Obj: '{target_brand}', K Final: {k_final}")
+
     if not LANGCHAIN_OK or retriever_instance is None:
-        logger.error("Intento de búsqueda RAG con retriever_instance=None o Langchain no disponible.")
+        logger.error("RAG_SEARCH: Langchain no disponible o retriever_instance es None. Devolviendo lista vacía.")
         return []
-
-    # Usar k_final de settings_instance si no se provee, o un default
-    _k_final_to_use = final_k_to_return = k_final if k_final is not None else (settings_instance.rag_default_k if settings_instance else 3)
-    _k_multiplier = settings_instance.rag_k_fetch_multiplier if settings_instance else 2
+    if not CONFIG_AND_LOGGER_OK_RAG or not settings: # Doble chequeo por si settings no está
+        logger.error("RAG_SEARCH: Settings no disponible. Usando k por defecto. Funcionalidad RAG limitada.")
+        _k_final_to_use = k_final if k_final is not None and k_final > 0 else 3 # Fallback K
+    else:
+        _k_final_to_use = k_final if k_final is not None and k_final > 0 else getattr(settings, 'RAG_DEFAULT_K', 3)
     
-    # Asegurar que k en search_kwargs del retriever sea al menos k_final * multiplicador
-    # Esto es más una guía, el retriever ya fue configurado con k_to_fetch_initially al crearse.
-    # Si se necesita k dinámico, se podría reconfigurar search_kwargs aquí.
-    # Por ahora, confiamos en la configuración inicial del retriever.
-    # k_for_retriever = retriever_instance.search_kwargs.get('k', _k_final_to_use * _k_multiplier)
-
-
+    logger.debug(f"  K final a usar para selección de documentos: {_k_final_to_use}")
+    
     relevant_docs_final: List[LangchainDocument] = []
     try:
-        logger.debug(f"Ejecutando retriever.get_relevant_documents para query: '{user_query[:70]}...' (target_brand: {target_brand}, k_final: {_k_final_to_use})")
+        # El retriever ya tiene configurado su 'k' para la búsqueda inicial (k_for_retriever_search)
+        # get_relevant_documents usará ese 'k'
+        retriever_k_cfg_val = "N/A"
+        if hasattr(retriever_instance, 'search_kwargs') and isinstance(retriever_instance.search_kwargs, dict):
+            retriever_k_cfg_val = retriever_instance.search_kwargs.get('k', "No definido en search_kwargs")
 
-        initial_results: List[LangchainDocument] = await asyncio.to_thread(
-            retriever_instance.get_relevant_documents, # Este es el método correcto
-            query=user_query
+        logger.debug(f"  Ejecutando retriever.get_relevant_documents (k del retriever: {retriever_k_cfg_val}) para query...")
+        
+        # La llamada a get_relevant_documents de Langchain es síncrona, por eso se usa to_thread
+        initial_docs_found: List[LangchainDocument] = await asyncio.to_thread(
+            retriever_instance.get_relevant_documents, 
+            user_query # El 'query' es el único argumento necesario aquí
         )
-        num_initial_results = len(initial_results)
-        logger.info(f"Retriever devolvió {num_initial_results} documentos iniciales (k configurado en retriever: {retriever_instance.search_kwargs.get('k')}).")
+        num_initial_docs = len(initial_docs_found)
+        logger.info(f"  Retriever devolvió {num_initial_docs} documentos iniciales.")
 
-
-        if not initial_results:
-            logger.info("La búsqueda inicial no devolvió documentos.")
+        if not initial_docs_found:
+            logger.info("  La búsqueda inicial del retriever no devolvió ningún documento.")
             return []
 
-        if target_brand:
-            logger.info(f"Filtrando {num_initial_results} resultados por marca normalizada: '{target_brand}'...")
-            filtered_docs_for_brand = []
-            seen_content_for_brand = set() 
+        # Filtrar y seleccionar los documentos finales
+        if target_brand: # target_brand debe ser el nombre normalizado
+            logger.info(f"  Filtrando {num_initial_docs} resultados por metadato 'brand' == '{target_brand}'...")
+            filtered_by_brand_docs = []
+            seen_content_in_brand_filter = set()
             
-            for doc in initial_results:
-                doc_brand_metadata = doc.metadata.get('brand') # Asumimos que 'brand' está en minúsculas y normalizado
+            for i, doc in enumerate(initial_docs_found):
+                # Asumimos que la metadata 'brand' contiene el nombre normalizado de la marca
+                doc_brand_meta = doc.metadata.get('brand') 
+                # logger.debug(f"    Doc {i} - Brand en metadata: '{doc_brand_meta}', Content preview: '{doc.page_content[:50]}...'")
+                if doc_brand_meta == target_brand:
+                    if doc.page_content not in seen_content_in_brand_filter: # Evitar duplicados de contenido exacto
+                        filtered_by_brand_docs.append(doc)
+                        seen_content_in_brand_filter.add(doc.page_content)
+                    # else: logger.debug(f"      Doc {i} OMITIDO (contenido duplicado) para marca '{target_brand}'.")
                 
-                if doc_brand_metadata == target_brand: # Comparar con target_brand normalizado
-                    if doc.page_content not in seen_content_for_brand:
-                        filtered_docs_for_brand.append(doc)
-                        seen_content_for_brand.add(doc.page_content)
-                    else:
-                        logger.debug(f"Chunk con contenido duplicado omitido para marca '{target_brand}'. Source: {doc.metadata.get('source')}")
-                
-                if len(filtered_docs_for_brand) >= _k_final_to_use:
-                    break # Salir si ya tenemos suficientes para k_final
-            
-            relevant_docs_final = filtered_docs_for_brand
-            logger.info(f"Filtrado por marca: {len(relevant_docs_final)} documentos para '{target_brand}' (objetivo k={_k_final_to_use}).")
-            if not relevant_docs_final and num_initial_results > 0 : # Solo advertir si había resultados iniciales
-                logger.warning(f"No se encontraron documentos específicos para la marca '{target_brand}' después del filtrado (de {num_initial_results} iniciales).")
-        else:
-            logger.info(f"Búsqueda RAG global (sin filtro de marca). Tomando hasta k={_k_final_to_use} resultados únicos.")
-            unique_docs_global = []
-            seen_content_global = set()
-            for doc in initial_results:
-                if doc.page_content not in seen_content_global:
-                    unique_docs_global.append(doc)
-                    seen_content_global.add(doc.page_content)
-                if len(unique_docs_global) >= _k_final_to_use:
+                if len(filtered_by_brand_docs) >= _k_final_to_use: # Si ya tenemos suficientes para esta marca
+                    logger.debug(f"    Alcanzado límite de k_final ({_k_final_to_use}) para marca '{target_brand}'.")
                     break
-            relevant_docs_final = unique_docs_global
+            relevant_docs_final = filtered_by_brand_docs
+            logger.info(f"  Filtrado por marca completado. {len(relevant_docs_final)} docs para '{target_brand}' (objetivo k={_k_final_to_use}).")
+            if not relevant_docs_final and num_initial_docs > 0:
+                logger.warning(f"  ADVERTENCIA RAG: No se encontraron docs para marca '{target_brand}' tras filtrar {num_initial_docs} iniciales. "
+                               "Verifica que la metadata 'brand' en tus documentos coincida y que el retriever inicial traiga suficientes resultados.")
+        
+        else: # Sin filtro de marca, tomar los k_final mejores resultados únicos de los iniciales
+            logger.info(f"  Búsqueda RAG global (sin filtro de marca). Tomando hasta k={_k_final_to_use} resultados únicos de {num_initial_docs} iniciales.")
+            unique_global_docs = []
+            seen_content_globally = set()
+            for i, doc in enumerate(initial_docs_found):
+                if doc.page_content not in seen_content_globally:
+                    unique_global_docs.append(doc)
+                    seen_content_globally.add(doc.page_content)
+                if len(unique_global_docs) >= _k_final_to_use: break
+            relevant_docs_final = unique_global_docs
+            logger.info(f"  Selección global completada. {len(relevant_docs_final)} documentos únicos seleccionados.")
 
-    except AttributeError as ae: 
-        logger.error(f"AttributeError durante búsqueda RAG (¿retriever mal configurado o settings_instance es None?): {ae}", exc_info=True)
+    except AttributeError as ae_search: 
+        logger.error(f"RAG_SEARCH: AttributeError durante búsqueda (¿retriever mal configurado o settings es None?): {ae_search}", exc_info=True)
         relevant_docs_final = []
-    except Exception as e_search:
-        logger.error(f"Error inesperado durante la búsqueda RAG: {e_search}", exc_info=True)
+    except Exception as e_search_unexp:
+        logger.error(f"RAG_SEARCH: Error inesperado durante la búsqueda: {e_search_unexp}", exc_info=True)
         relevant_docs_final = []
 
-    logger.info(f"Búsqueda RAG finalizó. Devolviendo {len(relevant_docs_final)} documentos.")
+    logger.info(f"RAG_SEARCH: Búsqueda finalizada. Devolviendo {len(relevant_docs_final)} documentos.")
+    # if relevant_docs_final: # Loguear los documentos finales si es necesario para depuración
+    #     for i, doc_f in enumerate(relevant_docs_final):
+    #          logger.debug(f"    Doc Final {i}: Metadata={doc_f.metadata}, Preview='{doc_f.page_content[:100]}...'")
     return relevant_docs_final

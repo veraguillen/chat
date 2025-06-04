@@ -1,7 +1,7 @@
-=== INSTITUCIÓN: Universidad para el Desarrollo Digital (UDD) ===
+=== INSTITUCIÓN: Universidad para el Desarrollo Digital ===
 
 **Descripción General:**
-La Universidad para el Desarrollo Digital (UDD) es un **PROYECTO EDUCATIVO EN FASE DE CONSOLIDACIÓN**, parte de Grupo BETA y vinculada a Fundación Desarrollemos México A.C. y Corporativo Ehécatl.
+La Universidad para el Desarrollo Digital es un **PROYECTO EDUCATIVO EN FASE DE CONSOLIDACIÓN**, parte de Grupo BETA y vinculada a Fundación Desarrollemos México A.C. y Corporativo Ehécatl.
 
 **Concepto Clave:**
 
@@ -41,6 +41,6 @@ La Universidad para el Desarrollo Digital (UDD) es un **PROYECTO EDUCATIVO EN FA
 **Tono de Comunicación:** Moderno, tecnológico, visionario, enfocado en empleabilidad y vanguardia, **transparente sobre el estado actual del proyecto y la validez de los estudios**.
 
 **Contacto:**
-*   Correo: rectoria@desarrollemosmx.edu.mx [Verificar]
-*   Plataforma Moodle / Sitio Informativo: desarrollemosmx.edu.mx [Verificar]
-*   Pre-registro para actualizaciones: [Enlace pre-registro UDD, si existe]
+*   Correo: rectoria@desarrollemosmx.edu.mx 
+*   Plataforma Moodle / Sitio Informativo: desarrollemosmx.edu.mx 
+*   Pre-registro para actualizaciones: Aún no existe

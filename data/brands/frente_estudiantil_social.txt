@@ -1,7 +1,7 @@
-=== INSTITUCIÓN: Frente Estudiantil Social (FES) ===
+=== INSTITUCIÓN: Frente Estudiantil Social===
 
 **Descripción General:**
-El Frente Estudiantil Social (FES) es una plataforma educativa **EXPERIMENTAL y NO FORMAL**, asociada a Grupo BETA y Javier Bazán García.
+El Frente Estudiantil Social es una plataforma educativa **EXPERIMENTAL y NO FORMAL**, asociada a Grupo BETA y Javier Bazán García.
 
 **Concepto Clave:**
 
@@ -20,8 +20,7 @@ El Frente Estudiantil Social (FES) es una plataforma educativa **EXPERIMENTAL y 
 **Tono de Comunicación:** Juvenil, dinámico, colaborativo, práctico, "maker", experimental, transparente sobre la no formalidad.
 
 **Participación:**
-*   Contacto: fes@gmail.com [Verificar y/o proporcionar método de contacto actualizado]
-*   Comunidad: [Enlace Comunidad FES, si existe, ej. grupo redes sociales, Discord, etc.]
-*   (Para saber cómo participar, proponer ideas o unirse a talleres).
+*   Contacto: Frente_estudiantil_social@gmail.com 
+*   Comunidad: 
+*   Para saber cómo participar, proponer ideas o unirse a talleres.
 
-[Enlace a información del FES, si existe algún sitio o red social oficial]

@@ -13,7 +13,9 @@ from app.utils.logger import logger
 # --- Constantes de Estados ---
 STAGE_SELECTING_BRAND = "selecting_brand"
 STAGE_AWAITING_ACTION = "awaiting_action_choice"
+STAGE_AWAITING_QUERY_FOR_RAG = "awaiting_query_for_rag"  # Estado para recibir la consulta después de seleccionar "Consultar información"
 STAGE_MAIN_CHAT_RAG = "main_chat_rag"
+STAGE_CALENDLY_INITIATE = "calendly_initiate"  # Estado para iniciar proceso de agendamiento
 STAGE_PROVIDING_SCHEDULING_INFO = "providing_scheduling_info"
 STAGE_COLLECTING_NAME = "collecting_name"
 STAGE_COLLECTING_EMAIL = "collecting_email"
@@ -121,30 +123,38 @@ async def get_or_create_user_state(db_session: AsyncSession, user_id: str, platf
             stage=STAGE_SELECTING_BRAND,
             is_subscribed=True,
             last_interaction_at=current_time_utc
-            # created_at se maneja por server_default
         )
         db_session.add(user_state)
         try:
             await db_session.commit()
             await db_session.refresh(user_state)
-            logger.info(f"Nuevo UserState creado y guardado para {platform}:{user_id}. ID_interno_si_aplica (no PK), Stage: {user_state.stage}")
+            logger.info(f"Nuevo UserState creado y guardado para {platform}:{user_id}. ID: {user_state.id}, Stage: {user_state.stage}")
         except Exception as e:
             logger.error(f"Error al guardar nuevo UserState para {platform}:{user_id}: {e}", exc_info=True)
             await db_session.rollback()
             raise
     else:
+        # Actualizar solo el timestamp y el nombre si es necesario
         user_state.last_interaction_at = current_time_utc
         if display_name and user_state.collected_name != display_name:
             user_state.collected_name = display_name
-        # No es necesario db_session.add(user_state) si solo actualizas campos en un objeto ya rastreado,
-        # pero el commit al final de la transacción del webhook guardará los cambios.
+            db_session.add(user_state)
+            try:
+                await db_session.commit()
+                logger.debug(f"Nombre de usuario actualizado para {platform}:{user_id}")
+            except Exception as e:
+                logger.error(f"Error al actualizar nombre de usuario {platform}:{user_id}: {e}", exc_info=True)
+                await db_session.rollback()
+        
         logger.debug(f"UserState existente para {platform}:{user_id}. Stage:'{user_state.stage}'. Timestamp actualizado.")
+    
     return user_state
 
 async def update_user_state_db(db_session: AsyncSession, user_state_obj: UserState, updates: Dict[str, Any]):
     """Actualiza campos de un objeto UserState existente y lo marca para commit."""
     updated_fields_log = {}
     changed_besides_timestamp = False
+    user_key = f"{user_state_obj.platform}:{user_state_obj.user_id}"
     
     for key, value in updates.items():
         if hasattr(user_state_obj, key):
@@ -154,17 +164,54 @@ async def update_user_state_db(db_session: AsyncSession, user_state_obj: UserSta
                 updated_fields_log[key] = value
                 changed_besides_timestamp = True
         else:
-            logger.warning(f"Intento de actualizar campo inexistente '{key}' en UserState para {user_state_obj.platform}:{user_state_obj.user_id}.")
+            logger.warning(f"Intento de actualizar campo inexistente '{key}' en UserState para {user_key}.")
     
     user_state_obj.last_interaction_at = datetime.now(timezone.utc) # Asegurar que onupdate funcione o actualizar manualmente
-    db_session.add(user_state_obj) # Marcar el objeto como modificado para la sesión
-
+    
+    try:
+        # Asegurar que obtenemos la referencia más reciente desde la DB
+        db_user_state = await db_session.get(UserState, (user_state_obj.user_id, user_state_obj.platform))
+        
+        if db_user_state:
+            # Actualizar también la referencia de DB directamente
+            for key, value in updates.items():
+                if hasattr(db_user_state, key):
+                    setattr(db_user_state, key, value)
+            db_user_state.last_interaction_at = user_state_obj.last_interaction_at
+            
+            # Marcar ambos objetos para actualización
+            db_session.add(db_user_state)
+        
+        # En cualquier caso, marcar el objeto original también
+        db_session.add(user_state_obj)
+        
+        # Forzar flush para asegurar persistencia inmediata
+        await db_session.flush()
+        
+        # Intentar commit inmediato para mayor seguridad
+        await db_session.commit()
+        
+        if changed_besides_timestamp:
+            logger.info(f"UserState {user_key} actualizado y guardado en DB con: {updated_fields_log}")
+            
+            # Verificación adicional de diagnóstico
+            if "stage" in updates and updates["stage"] == STAGE_MAIN_CHAT_RAG:
+                # Verificar que el cambio a RAG se haya guardado correctamente
+                verification = await db_session.get(UserState, (user_state_obj.user_id, user_state_obj.platform))
+                if verification and verification.stage == STAGE_MAIN_CHAT_RAG:
+                    logger.debug(f"DIAGNÓSTICO-RAG: Verificado que el estado {user_key} se actualizó correctamente a STAGE_MAIN_CHAT_RAG en DB")
+                else:
+                    logger.warning(f"DIAGNÓSTICO-RAG: ¡ALERTA! El estado {user_key} NO se actualizó correctamente a STAGE_MAIN_CHAT_RAG en DB")
+    
+    except Exception as e:
+        logger.error(f"Error al actualizar UserState en DB para {user_key}: {e}", exc_info=True)
+        await db_session.rollback()
+        # A pesar del error, actualizamos el objeto en memoria para mantener la consistencia del flujo
+        if changed_besides_timestamp:
+            logger.info(f"UserState {user_key} actualizado SOLO EN MEMORIA con: {updated_fields_log} (falló persistencia en DB)")
+    
     if updates.get("stage") == STAGE_SELECTING_BRAND:
         clear_conversation_history(f"{user_state_obj.platform}:{user_state_obj.user_id}")
-
-    if changed_besides_timestamp:
-        logger.info(f"UserState {user_state_obj.platform}:{user_state_obj.user_id} actualizado con: {updated_fields_log}")
-    # El commit se hará al final del request en webhook_handler.
 
 async def reset_user_to_brand_selection(db_session: AsyncSession, user_state_obj: UserState):
     """Resetea el estado del UserState a la selección de marca inicial."""
@@ -172,6 +219,7 @@ async def reset_user_to_brand_selection(db_session: AsyncSession, user_state_obj
         "current_brand_id": None,
         "stage": STAGE_SELECTING_BRAND,
         "purpose_of_inquiry": None,
+        "session_explicitly_ended": False,  # Reiniciar el flag de fin de sesión
         # No resetear collected_name, email, phone, o is_subscribed aquí por defecto
     }
     await update_user_state_db(db_session, user_state_obj, fields_to_reset)
@@ -208,48 +256,126 @@ _conversation_history: Dict[str, List[Dict[str, str]]] = {}
 _MAX_HISTORY_TURNS = 10 # Guardar N turnos (1 turno = 1 user + 1 assistant)
 
 def get_conversation_history(user_key: str) -> List[Dict[str, str]]:
-    history = _conversation_history.get(user_key, [])
-    logger.debug(f"Historial para {user_key} recuperado: {len(history)} mensajes individuales.")
-    return history
+    """Obtiene el historial de conversación para un usuario."""
+    return _conversation_history.get(user_key, [])
 
 def add_to_conversation_history(user_key: str, role: str, content: str):
+    """
+    Añade un mensaje al historial de conversación del usuario.
+    
+    Args:
+        user_key: Clave única del usuario (ej: 'whatsapp:123456789')
+        role: 'user' o 'assistant'
+        content: Contenido del mensaje
+    """
     if user_key not in _conversation_history:
         _conversation_history[user_key] = []
     
-    _conversation_history[user_key].append({"role": role, "content": content})
+    # Mantener solo los últimos N turnos de conversación
+    if len(_conversation_history[user_key]) >= _MAX_HISTORY_TURNS * 2:  # Multiplicar por 2 porque cada turno tiene user+assistant
+        _conversation_history[user_key] = _conversation_history[user_key][-((_MAX_HISTORY_TURNS-1)*2):]
     
-    # Limitar la longitud del historial (contando mensajes individuales)
-    if len(_conversation_history[user_key]) > _MAX_HISTORY_TURNS * 2: # Aprox. N turnos
-        _conversation_history[user_key] = _conversation_history[user_key][-(_MAX_HISTORY_TURNS * 2):]
-        
+    _conversation_history[user_key].append({"role": role, "content": content})
     logger.debug(f"Mensaje añadido al historial de {user_key}: {role}: {content[:50]}... (Longitud: {len(_conversation_history[user_key])})")
 
 def clear_conversation_history(user_key: str):
+    """Limpia el historial de conversación para un usuario."""
+    global _conversation_history
     if user_key in _conversation_history:
         del _conversation_history[user_key]
-        logger.info(f"Historial de conversación en memoria borrado para {user_key}.")
+        logger.debug(f"Historial de conversación limpiado para {user_key}")
+
+def remove_last_user_message_from_history(user_key: str):
+    """Elimina el último mensaje del usuario del historial de conversación.
+    
+    Útil para evitar registrar mensajes de salida como consultas de RAG.
+    
+    Args:
+        user_key: Clave única del usuario (ej: 'whatsapp:123456789')
+    """
+    global _conversation_history
+    if user_key in _conversation_history:
+        # Buscar el último mensaje del usuario para eliminarlo
+        for i in range(len(_conversation_history[user_key]) - 1, -1, -1):
+            if _conversation_history[user_key][i]['role'] == 'user':
+                # Eliminar este mensaje
+                removed_message = _conversation_history[user_key].pop(i)
+                logger.info(f"Mensaje de usuario eliminado del historial para {user_key}: '{removed_message['content']}'")
+                break
+        logger.debug(f"Historial de conversación limpiado para {user_key}")
 
 # --- MENSAJES DE SELECCIÓN ---
-async def get_company_selection_message(db_session: AsyncSession, user_state_obj: UserState) -> str: # Recibe UserState
-    logger.info(f"get_company_selection_message para: {user_state_obj.platform}:{user_state_obj.user_id}")
-    companies = await get_all_companies(db_session)
-    if not companies:
-         return "Lo siento, no puedo mostrar opciones ahora. Intenta 'menu' más tarde."
+async def get_company_selection_message(db_session: AsyncSession, user_state_obj: UserState) -> str:
+    """
+    Genera un mensaje de selección de empresa con emojis numéricos y manejo adecuado de caracteres especiales.
     
-    options_parts = [f"{idx + 1}️⃣ {comp.name.strip()}" for idx, comp in enumerate(companies) if comp.name]
+    Args:
+        db_session: Sesión de base de datos asíncrona
+        user_state_obj: Objeto UserState con el estado actual del usuario
+        
+    Returns:
+        str: Mensaje formateado con la lista de empresas numeradas
+    """
+    logger.info(f"get_company_selection_message para: {user_state_obj.platform}:{user_state_obj.user_id}")
+    
+    # Forzar la recarga de la caché para obtener los datos más recientes
+    companies = await get_all_companies(db_session, force_reload_cache=True)
+    
+    if not companies:
+        return "Lo siento, no puedo mostrar opciones ahora. Intenta 'menu' más tarde."
+    
+    # Crear lista de opciones con emojis numéricos y nombres de empresas
+    options_parts = []
+    number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    
+    for idx, comp in enumerate(companies):
+        if comp.name:
+            # Normalizar el nombre de la empresa para asegurar la codificación correcta
+            company_name = comp.name.strip()
+            # Reemplazar caracteres problemáticos
+            company_name = company_name.replace('‚', 'é').replace('¢', 'ó').replace('¡', 'í')
+            
+            # Acortar nombres largos de empresas para mayor concisión
+            if "Corporativo Ehécatl SA de CV" in company_name:
+                company_name = company_name.replace("Corporativo Ehécatl SA de CV", "Corporativo Ehécatl")
+            elif "Fundación Desarrollemos México A.C." in company_name:
+                company_name = company_name.replace("Fundación Desarrollemos México A.C.", "Fundación Desarrollemos México")
+            
+            # Usar el emoji numérico si está disponible
+            if idx < len(number_emojis):
+                option = f"{number_emojis[idx]} {company_name}"
+            else:
+                # Si hay más opciones que emojis, usar números normales
+                option = f"{idx + 1}. {company_name}"
+            
+            # Asegurarse de que la opción esté en formato UTF-8
+            if isinstance(option, str):
+                options_parts.append(option.encode('utf-8').decode('utf-8'))
+            else:
+                options_parts.append(option)
+    
     if not options_parts:
         return "Lo siento, problema al mostrar opciones."
     
     options_text = "\n".join(options_parts)
     
+    # Crear saludo personalizado
     greeting = "¡Hola! 👋"
     if user_state_obj.collected_name:
         user_first_name = user_state_obj.collected_name.split()[0]
         greeting = f"¡Hola de nuevo, {user_first_name}! 👋" if user_state_obj.current_brand_id else f"¡Hola, {user_first_name}! 👋"
-         
-    return f"{greeting}\nGracias por contactarnos. Para ayudarte mejor, selecciona la empresa o consultor de tu interés:\n\n{options_text}\n\nEscribe el número o el nombre de la opción."
+    
+    # Mensaje final con codificación explícita
+    message = f"""{greeting}
+Gracias por contactarnos. Para ayudarte mejor, selecciona la empresa o consultor de tu interés:
 
-async def get_action_selection_message(company_name: Optional[str], user_state_obj: UserState) -> Dict[str, Any]: # Recibe UserState
+{options_text}
+
+Escribe el número o el nombre de la opción."""
+    
+    return message
+
+async def get_action_selection_message(company_name: Optional[str], user_state_obj: UserState) -> Dict[str, Any]:
     effective_company_name = company_name if company_name and company_name.strip() else "la entidad seleccionada"
     
     greeting_name_part = ""
@@ -258,14 +384,34 @@ async def get_action_selection_message(company_name: Optional[str], user_state_o
         greeting_name_part = f", {user_first_name}"
 
     message_text = (f"¡Excelente{greeting_name_part}! Has seleccionado *{effective_company_name}*.\n"
-                    f"¿Qué te gustaría hacer a continuación?")
+                   f"¿Qué te gustaría hacer a continuación?")
 
+    # Botones de acción rápida
     buttons = [
-        {"type": "reply", "reply": {"id": "action_a", "title": "🗓️ Agendar Cita"}},
-        {"type": "reply", "reply": {"id": "action_b", "title": "❓ Consulta General"}},
-        {"type": "reply", "reply": {"id": "action_menu", "title": "↩️ Otro Tema/Menú"}}
+        {
+            "type": "reply",
+            "reply": {
+                "id": "action_rag",
+                "title": "🗣️ Consultar"
+            }
+        },
+        {
+            "type": "reply",
+            "reply": {
+                "id": "action_schedule",
+                "title": "📅 Agendar"
+            }
+        }
     ]
-    return {"text": message_text, "buttons": buttons}
+    
+    # Mantener compatibilidad con el código existente
+    text_fallback = f"{message_text}\n\n1. Consultar\n2. Agendar"
+    
+    return {
+        "text": message_text,
+        "buttons": buttons,
+        "text_fallback": text_fallback  # Para compatibilidad
+    }
 
 # (Opcional) Funciones adicionales que podrías necesitar
 async def get_user_state_details(db_session: AsyncSession, user_id: str, platform: str) -> Optional[Dict[str, Any]]:
