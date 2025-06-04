@@ -1,84 +1,133 @@
-# Entorno virtual
-.venv/
-venv/
-env/
-
-# Archivos de configuración sensible
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-logs/
-chatbot.log
-
-# Archivos de caché de Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-
-# Archivos de desarrollo
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Archivos de distribución
-dist/
-build/
-*.egg-info/
-
-# Archivos temporales
-.DS_Store
-Thumbs.db
-
-<<<<<<< HEAD
-.qodo
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
-venv/
 
-# Logs
+# Entornos virtuales
+env/
+venv/
+.venv/
+ENV/
+
+# Archivos de entorno
+.env
+.env.local
+*.env
+
+# Archivos de configuración local
+app_config.json
+azure.yaml
+local_settings.py
+local_config.py
+
+# Archivos de despliegue (contienen credenciales)
+deploy_azure.ps1
+deploy_azure_fixed.ps1
+setup_azure_resources.ps1
+deploy.sh
+
+# Archivos de IDE y editores
+.vscode/
+.idea/
+.vs/
+*.sublime-workspace
+*.sublime-project
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Archivos de desarrollo
+*.log
+*.bak
+*.swp
+*.swo
+*.tmp
+
+# Testing y cobertura
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Paquetes de Python
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Archivos de base de datos
+*.db
+*.sqlite3
+*.sql
+*.dump
+
+# Archivos grandes y datos
+data/faiss_index_*
+*.pkl
+*.faiss
+*.pdf
+*.docx
+*.xlsx
+
+# Logs y archivos de sistema
 logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Environment variables
-.env
-.env.*
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
 
-# VS Code
-.vscode/
-*.code-workspace
+# Archivos temporales
+tmp/
+temp/
 
-# Azure
-.azure/
+# Archivos de Jupyter Notebook
+.ipynb_checkpoints
 
-# Project specific
-data/faiss_index_kb_spanish_v1/
-chatbot.log
-=======
-.qodo
+# Archivos de PyCharm
+.idea/
+*.iml
+.idea_modules/
 
-.vercel
->>>>>>> febb3041ee6c59b4cf7ca3aa7f3639798606a739
+# Archivos de VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Archivos de Python compilados
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos de Cython
+*.so
+
+# Archivos de distribución
+/dist
+/build
+/*.egg-info/
+
+# Archivos de entorno virtual
+venv/
+ENV/
+
+# Archivos de IPython
+profile_default/
+ipython_config.py
+
+# Archivos de mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Archivos de Pyre type checker
+.pyre/

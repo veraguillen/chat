@@ -1,24 +1,35 @@
-# app/main/routes.py
 from fastapi import APIRouter, Query, Depends, Request, HTTPException, Body
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, Optional
-import json # Para el manejo de JSON si es necesario
+import json
+import os
 
 from app.core.config import settings
 from app.core.database import get_db_session
-from app.main.webhook_handler import process_webhook_payload # Ruta al handler
+from app.main.webhook_handler import process_webhook_payload
 from app.utils.logger import logger
 
 router = APIRouter()
 
-settings.verify_token 
+# Remove duplicate FastAPI instance
+# Remove these lines:
+# from fastapi import FastAPI
+# import os
+# app = FastAPI(title="Prueba Simple API")
+
 VERIFY_TOKEN = settings.verify_token
 
-if not VERIFY_TOKEN:
-    logger.critical(
-        "CRÍTICO: WEBHOOK_VERIFY_TOKEN no está configurado. La verificación del webhook fallará."
-    )
+# Move root endpoint to router
+@router.get("/")
+async def read_root():
+    port = os.getenv("WEBSITES_PORT", "No definido (revisar WEBSITES_PORT)")
+    return {
+        "message": "¡Hola Mundo desde FastAPI en Azure App Service!",
+        "info": "Esta es una aplicación de prueba muy simple.",
+        "puerto_escucha_esperado_en_app_service": port,
+        "nota": "Si ves esto, FastAPI y Uvicorn están funcionando!"
+    }
 
 @router.get("/webhook", response_class=PlainTextResponse, tags=["Webhook"])
 async def verify_webhook_route(

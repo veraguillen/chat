@@ -1,0 +1,11 @@
+name: chatbot-app
+services:
+  - name: web
+    project: .
+    language: python
+    host: appservice
+    env:
+      - name: WEBSITES_PORT
+        value: 8000
+      - name: PYTHON_VERSION
+        value: 3.11
