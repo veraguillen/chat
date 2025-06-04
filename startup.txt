@@ -1,0 +1,2 @@
+# Startup command for Azure App Service
+gunicorn --bind=0.0.0.0:8000 --timeout 600 -k uvicorn.workers.UvicornWorker --workers 4 --threads 2 app.main:app

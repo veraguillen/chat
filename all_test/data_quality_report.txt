@@ -1,0 +1,48 @@
+
+================================================================================
+INFORME DE CALIDAD DE DATOS
+================================================================================
+
+📊 ESTADÍSTICAS GENERALES
+• Archivos analizados: 6
+• Archivos válidos: 6 (100.0%)
+• Archivos con problemas: 0 (0.0%)
+
+🏷️  ESTADÍSTICAS POR MARCA
+--------------------------------------------------
+
+🔹 CONSULTOR_JAVIER_BAZAN
+   • Archivos: 1
+   • Palabras totales: 802
+   • Problemas de chunks: 2
+
+🔹 CORPORATIVO_EHECATL
+   • Archivos: 1
+   • Palabras totales: 672
+   • Problemas de chunks: 1
+
+🔹 CORPORATIVO_EHECATL_1
+   • Archivos: 1
+   • Palabras totales: 629
+   • Problemas de chunks: 1
+
+🔹 FRENTE_ESTUDIANTIL_SOCIAL
+   • Archivos: 1
+   • Palabras totales: 456
+   • Problemas de chunks: 1
+
+🔹 FUNDACION_DESARROLLEMOS_MEXICO
+   • Archivos: 1
+   • Palabras totales: 912
+   • Problemas de chunks: 1
+
+🔹 UNIVERSIDAD_DESARROLLO_DIGITAL
+   • Archivos: 1
+   • Palabras totales: 313
+   • Problemas de chunks: 1
+
+💡 RECOMENDACIONES
+• ¡Todos los archivos son válidos! Puedes proceder a crear el índice.
+• Verifica los problemas de chunks en archivos grandes
+• Considera dividir archivos muy grandes en documentos más pequeños
+

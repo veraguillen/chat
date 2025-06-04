@@ -1,0 +1,1 @@
+DATABASE_URL="postgresql+asyncpg://useradmin:Chat8121943.@chatbot-iram.postgres.database.azure.com:5432/chatbot_db?ssl=require"
