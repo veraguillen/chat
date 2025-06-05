@@ -27,11 +27,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Login to Azure
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
           enable-AzPSSession: false
-
       - name: Login to Azure Container Registry
         run: |
           az acr login --name ${{ env.ACR_NAME }}
@@ -41,7 +40,6 @@ jobs:
           echo "Building image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
           docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          
           echo "Pushing images to ACR..."
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
@@ -54,7 +52,6 @@ jobs:
 
       - name: Configure App Settings
         run: |
-          # Configurar variables de entorno
           az webapp config appsettings set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.AZURE_WEBAPP_NAME }} --settings \
             WEBSITES_PORT=8000 \
             DATABASE_URL="postgresql+asyncpg://useradmin:Chat8121943.@chatbot-iram.postgres.database.azure.com:5432/chatbot_db?ssl=require" \
@@ -70,8 +67,6 @@ jobs:
             FAISS_INDEX_NAME="index" \
             EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2" \
             RAG_DEFAULT_K="3"
-          
           echo "Restarting App Service..."
           az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.AZURE_WEBAPP_NAME }}
-          
           echo "Deployment complete. App available at: https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"
