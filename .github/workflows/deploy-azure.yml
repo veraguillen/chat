@@ -1,17 +1,17 @@
-name: Build and deploy Python app to Azure Web App
-
-env:
-  AZURE_WEBAPP_NAME: grupo-beta
-  PYTHON_VERSION: '3.11'
-  ACR_NAME: chat2025
-  REGISTRY: chat2025.azurecr.io
-  IMAGE_NAME: chatbot-app
-  RESOURCE_GROUP: beta-bot
+name: Deploy to Azure
 
 on:
   push:
     branches: [ master ]
   workflow_dispatch:
+
+env:
+  ACR_NAME: chat2025
+  REGISTRY: chat2025.azurecr.io
+  IMAGE_NAME: chatbot-app
+  RESOURCE_GROUP: beta-bot
+  APP_NAME: grupo-beta
+  TAG: ${{ github.sha }}
 
 jobs:
   build-and-deploy:
@@ -19,80 +19,72 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+        uses: actions/checkout@v4
 
       - name: Login to Azure
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-          enable-AzPSSession: false
-          
+
       - name: Login to Azure Container Registry
         run: |
           az acr login --name ${{ env.ACR_NAME }}
-
+          
       - name: Build and push Docker image
         run: |
-          echo "Building image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          echo "Building image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}"
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }} .
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          
           echo "Pushing images to ACR..."
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-
-      - name: Deploy to Azure Web App
+          
+      - name: Deploy to Azure App Service
         uses: azure/webapps-deploy@v2
         with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          app-name: ${{ env.APP_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
 
-      - name: Configure App Settings
+      - name: Configure App Service
         run: |
-          az webapp config appsettings set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.AZURE_WEBAPP_NAME }} --settings \
-            WEBSITES_PORT=8000 \
-            DATABASE_URL="postgresql+asyncpg://useradmin:Chat8121943.@chatbot-iram.postgres.database.azure.com:5432/chatbot_db?ssl=require" \
-            PGHOST="chatbot-iram.postgres.database.azure.com" \
-            PGPORT="5432" \
-            PGDATABASE="chatbot_db" \
-            PGUSER="useradmin" \
-            PGPASSWORD="Chat8121943." \
-            POSTGRES_SSL_MODE="require" \
-            STORAGE_ACCOUNT_NAME="chat2025" \
-            CONTAINER_NAME="chat2025" \
-            AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
-            FAISS_INDEX_NAME="index" \
-            EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2" \
-            RAG_DEFAULT_K="3"
-            VERIFY_TOKEN="Julia2025"
-            RECIPIENT_WAID="+56941325404" 
-            APP_ID="683462917735719"
-            APP_SECRET="37ca6279f0c98a2afd27a7204802ba4a"
-            WHATSAPP_PHONE_NUMBER_ID="665300739992317"
-            WHATSAPP_ACCESS_TOKEN="EAAJtmxxtxScBO2rZB0hZAREor30UII4vWncKV3hCOGFlmcIpRmvKNpYROUPW6eHuwbDt7p5JFWHYuZCHcnfbFOHH9TZAMakmnnfdEuoocCzeU63lTsqfSZAD1m05tZBowKMsL6qJLNwHzhtoOpGI5nLf3LWXZBsDo5k985PutKU7vtV2rVb6Wke7dPNmUHkk2XKCQZDZD"
-            CALENDLY_API_KEY="***REMOVED***"
-            CALENDLY_EVENT_TYPE_URI="https://api.calendly.com/event_types/6943da13-c493-4a09-8830-2184f4332a92"
-            DEBUG_MODE="False"
-            LOG_LEVEL="INFO"
-            STORAGE_ACCOUNT_NAME="chat2025"
-            CONTAINER_NAME="chat2025"
-            AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}"
-            FAISS_INDEX_NAME="index"
-            EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
-            RAG_DEFAULT_K="3"
-            
-            DATABASE_URL="postgresql+asyncpg://useradmin:Chat8121943.@chatbot-iram.postgres.database.azure.com:5432/chatbot_db?ssl=require"
-            PGHOST="chatbot-iram.postgres.database.azure.com"
-            PGPORT="5432"
-            PGDATABASE="chatbot_db"
-            PGUSER="useradmin"
-            PGPASSWORD="Chat8121943."
-            POSTGRES_SSL_MODE="require"
-            
+          # Configurar comando de inicio
+          az webapp config set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --startup-file "uvicorn run:app --host 0.0.0.0 --port \$PORT"
+          
+          # Configurar variables de entorno (usar secretos para datos sensibles)
+          az webapp config appsettings set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --settings \
+          WEBSITES_PORT=8000 \
+          DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+          PGHOST="${{ secrets.PGHOST }}" \
+          PGPORT="5432" \
+          PGDATABASE="${{ secrets.PGDATABASE }}" \
+          PGUSER="${{ secrets.PGUSER }}" \
+          PGPASSWORD="${{ secrets.PGPASSWORD }}" \
+          POSTGRES_SSL_MODE="require" \
+          WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
+          WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
+          VERIFY_TOKEN="${{ secrets.VERIFY_TOKEN }}" \
+          STORAGE_ACCOUNT_NAME="chat2025" \
+          CONTAINER_NAME="chat2025" \
+          AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+          FAISS_INDEX_NAME="index" \
+          EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2" \
+          RAG_DEFAULT_K="3"
+          
+      - name: Restart and verify App Service
+        run: |
           echo "Restarting App Service..."
-          az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.AZURE_WEBAPP_NAME }}
-          echo "Deployment complete. App available at: https://${{ env.AZURE_WEBAPP_NAME }}.azurewebsites.net"
+          az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }}
+          
+          echo "Waiting for application to restart..."
+          sleep 30
+          
+          echo "Checking application health..."
+          STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://${{ env.APP_NAME }}.azurewebsites.net/docs)
+          echo "Status code: $STATUS_CODE"
+          
+          echo "Deployment complete. App available at: https://${{ env.APP_NAME }}.azurewebsites.net"
+          
+      - name: Enable logging
+        run: |
+          az webapp log config --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --application-logging filesystem --level information --detailed-error-messages true
