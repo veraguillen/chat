@@ -17,6 +17,9 @@ ENV/
 .env.backup
 *.env
 
+# Configuración de git-filter-repo
+git-filter-repo-*.txt
+
 # Archivos de configuración local
 app_config.json
 azure.yaml
