@@ -22,6 +22,9 @@ EXPOSE 8000
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Comando para ejecutar la aplicación
+# Definir puerto con valor por defecto para desarrollo local
 ENV PORT=8000
-CMD ["gunicorn", "--bind", "0.0.0.0:${PORT}", "--timeout", "600", "-k", "uvicorn.workers.UvicornWorker", "app:app"]
+
+# Comando para ejecutar la aplicación con la ruta correcta a la instancia app
+# La instancia 'app' está en app/__init__.py, NO en app/main.py
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --timeout 600 -k uvicorn.workers.UvicornWorker app:app"]
