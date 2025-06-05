@@ -19,17 +19,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuración directa de Azure Storage
+# Configuración desde variables de entorno
 CONFIG = {
-    "STORAGE_ACCOUNT_NAME": "chat2025",
-    "CONTAINER_NAME": "chat2025",
-    "AZURE_STORAGE_CONNECTION_STRING": (
-        "DefaultEndpointsProtocol=https;"
-        "AccountName=chat2025;"
-        "***REMOVED***;"
-        "EndpointSuffix=core.windows.net"
-    ),
-    "FAISS_INDEX_NAME": "index"
+    "STORAGE_ACCOUNT_NAME": os.environ.get("STORAGE_ACCOUNT_NAME", ""),
+    "CONTAINER_NAME": os.environ.get("CONTAINER_NAME", ""),
+    "AZURE_STORAGE_CONNECTION_STRING": os.environ.get("AZURE_STORAGE_CONNECTION_STRING", ""),
+    "FAISS_INDEX_NAME": os.environ.get("FAISS_INDEX_NAME", "index")
 }
 
 async def download_faiss_files() -> bool:

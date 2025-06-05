@@ -50,19 +50,19 @@ class Settings(BaseSettings):
     # --- Base de Datos ---
     # El tipo aquí es Optional[str] porque el validador devuelve un str.
     # PostgresDsn se usa DENTRO del validador para construir/validar.
-    DATABASE_URL: Optional[str] = Field(default="postgresql+asyncpg://useradmin:Chat8121943.@bot.writer.postgres.database.azure.com:5432/chatbot_db", validation_alias="DATABASE_URL")
-    PGHOST: Optional[str] = Field(default="bot.writer.postgres.database.azure.com", validation_alias="PGHOST")
+    DATABASE_URL: Optional[str] = Field(default=None, validation_alias="DATABASE_URL")
+    PGHOST: Optional[str] = Field(default=None, validation_alias="PGHOST")
     PGPORT: Optional[str] = Field(default="5432", validation_alias="PGPORT") # Puede ser string, se convierte a int en validador
-    PGDATABASE: Optional[str] = Field(default="chatbot_db", validation_alias="PGDATABASE")
-    PGUSER: Optional[str] = Field(default="useradmin", validation_alias="PGUSER")
-    PGPASSWORD: Optional[str] = Field(default="Chat8121943.", validation_alias="PGPASSWORD")
+    PGDATABASE: Optional[str] = Field(default=None, validation_alias="PGDATABASE")
+    PGUSER: Optional[str] = Field(default=None, validation_alias="PGUSER")
+    PGPASSWORD: Optional[str] = Field(default=None, validation_alias="PGPASSWORD")
     POSTGRES_SSL_MODE: str = Field(default="require", validation_alias="POSTGRES_SSL_MODE")
 
     # --- Azure Storage para FAISS ---
-    STORAGE_ACCOUNT_NAME: Optional[str] = Field(default="chat2025", validation_alias="STORAGE_ACCOUNT_NAME")
-    CONTAINER_NAME: Optional[str] = Field(default="chat2025", validation_alias="CONTAINER_NAME")
+    STORAGE_ACCOUNT_NAME: Optional[str] = Field(default=None, validation_alias="STORAGE_ACCOUNT_NAME")
+    CONTAINER_NAME: Optional[str] = Field(default=None, validation_alias="CONTAINER_NAME")
     AZURE_STORAGE_CONNECTION_STRING: Optional[str] = Field(
-        default="DefaultEndpointsProtocol=https;AccountName=chat2025;***REMOVED***;EndpointSuffix=core.windows.net",
+        default=None,
         validation_alias="AZURE_STORAGE_CONNECTION_STRING"
     )
     
