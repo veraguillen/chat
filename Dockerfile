@@ -23,4 +23,5 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # Comando para ejecutar la aplicación
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--timeout", "600", "-k", "uvicorn.workers.UvicornWorker", "app.main:app"]
+ENV PORT=8000
+CMD ["gunicorn", "--bind", "0.0.0.0:${PORT}", "--timeout", "600", "-k", "uvicorn.workers.UvicornWorker", "app:app"]

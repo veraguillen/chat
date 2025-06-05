@@ -48,30 +48,10 @@ jobs:
 
       - name: Configure App Service
         run: |
-          # Configurar comando de inicio
-          az webapp config set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --startup-file "uvicorn run:app --host 0.0.0.0 --port \$PORT"
+          # Solo configuramos WEBSITES_PORT, el resto se gestiona desde el portal de Azure
+          az webapp config appsettings set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --settings WEBSITES_PORT=8000
           
-          # Configurar variables de entorno (usar secretos para datos sensibles)
-          az webapp config appsettings set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --settings \
-          WEBSITES_PORT=8000 \
-          DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-          PGHOST="${{ secrets.PGHOST }}" \
-          PGPORT="5432" \
-          PGDATABASE="${{ secrets.PGDATABASE }}" \
-          PGUSER="${{ secrets.PGUSER }}" \
-          PGPASSWORD="${{ secrets.PGPASSWORD }}" \
-          POSTGRES_SSL_MODE="require" \
-          WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
-          WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
-          VERIFY_TOKEN="${{ secrets.VERIFY_TOKEN }}" \
-          STORAGE_ACCOUNT_NAME="chat2025" \
-          CONTAINER_NAME="chat2025" \
-          AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
-          FAISS_INDEX_NAME="index" \
-          EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2" \
-          RAG_DEFAULT_K="3"
-          
-      - name: Restart and verify App Service
+      - name: Restart App Service
         run: |
           echo "Restarting App Service..."
           az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }}
