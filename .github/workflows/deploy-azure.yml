@@ -6,12 +6,15 @@ on:
   workflow_dispatch:
 
 env:
-  ACR_NAME: chat2025
-  REGISTRY: chat2025.azurecr.io
-  IMAGE_NAME: chatbot-app
-  RESOURCE_GROUP: beta-bot
-  APP_NAME: grupo-beta
-  TAG: ${{ github.sha }}
+  # Configuración de Azure
+  ACR_NAME: chat2025                    # Nombre de tu Azure Container Registry
+  ACR_REGISTRY: chat2025.azurecr.io     # URL completa del ACR
+  IMAGE_NAME: chat-app                  # Nombre de la imagen de Docker
+  RESOURCE_GROUP: beta-bot              # Grupo de recursos de Azure
+  APP_NAME: grupo-beta                  # Nombre de la App Service
+  
+  # Configuración de la imagen
+  TAG: ${{ github.sha }}                # Tag basado en el commit SHA
 
 jobs:
   build-and-deploy:
@@ -26,30 +29,73 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Set Azure Subscription
+        run: |
+          # Listar suscripciones disponibles
+          az account show
+          
+          # Opcional: Configurar una suscripción específica si es necesario
+          # az account set --subscription "Nombre o ID de la suscripción"
+
       - name: Login to Azure Container Registry
         run: |
-          az acr login --name ${{ env.ACR_NAME }}
+          echo "Iniciando sesión en ACR: ${{ env.ACR_NAME }}"
+          az acr login --name ${{ env.ACR_NAME }} --expose-token
           
       - name: Build and push Docker image
         run: |
-          echo "Building image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}"
-          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }} .
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          echo "Building image ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}"
+          docker build -t ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }} .
+          docker tag ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }} ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           
           echo "Pushing images to ACR..."
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+          docker push ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           
       - name: Deploy to Azure App Service
         uses: azure/webapps-deploy@v2
         with:
           app-name: ${{ env.APP_NAME }}
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+          images: ${{ env.ACR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
 
       - name: Configure App Service
         run: |
-          # Solo configuramos WEBSITES_PORT, el resto se gestiona desde el portal de Azure
-          az webapp config appsettings set --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --settings WEBSITES_PORT=8000
+          echo "Configurando variables de entorno en App Service..."
+          az webapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --settings \
+              WEBSITES_PORT=8000 \
+              ENVIRONMENT=production \
+              DEBUG=False \
+              LOG_LEVEL=INFO \
+              PROJECT_SITE_URL="https://${{ env.APP_NAME }}.azurewebsites.net" \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              WHATSAPP_VERIFY_TOKEN="${{ secrets.WHATSAPP_VERIFY_TOKEN }}" \
+              WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
+              WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
+              AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+              OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" \
+              HUGGINGFACE_TOKEN="${{ secrets.HUGGINGFACE_TOKEN }}" \
+              CALENDLY_API_KEY="${{ secrets.CALENDLY_API_KEY }}" \
+              CALENDLY_EVENT_TYPE_URI="${{ secrets.CALENDLY_EVENT_TYPE_URI }}" \
+              STORAGE_ACCOUNT_NAME=chat2025 \
+              CONTAINER_NAME=chat2025 \
+              EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2" \
+              FAISS_INDEX_NAME="index" \
+              FAISS_FOLDER_NAME="faiss_index_kb_spanish_v1" \
+              RAG_DEFAULT_K=3 \
+              RAG_K_FETCH_MULTIPLIER=2 \
+              RAG_MIN_CONTEXT_LENGTH_THRESHOLD=50 \
+              OPENROUTER_MODEL_CHAT="meta-llama/llama-3-8b-instruct" \
+              OPENROUTER_CHAT_ENDPOINT="https://openrouter.ai/api/v1" \
+              LLM_TEMPERATURE=0.5 \
+              LLM_MAX_TOKENS=1000 \
+              LLM_HTTP_TIMEOUT=45.0 \
+              CALENDLY_USER_SLUG="chatbotiram-mex" \
+              CALENDLY_TIMEZONE="America/Mexico_City" \
+              CALENDLY_DAYS_TO_CHECK=7 \
+              CALENDLY_GENERAL_SCHEDULING_LINK="https://calendly.com/chatbotiram-mex/ira-mexico"
           
       - name: Restart App Service
         run: |
