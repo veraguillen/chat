@@ -36,7 +36,7 @@ RUN echo '#!/bin/bash' > /app/start.sh && \
     echo 'echo "DATABASE_URL: [presente=$DATABASE_URL]"' >> /app/start.sh && \
     echo 'python /app/debug_startup.py' >> /app/start.sh && \
     echo 'echo "==== INICIANDO APLICACIÓN ====" ' >> /app/start.sh && \
-    echo 'exec gunicorn --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 600 --log-level debug --capture-output app:app' >> /app/start.sh && \
+    echo 'exec gunicorn --bind 0.0.0.0:${PORT:-8000} --workers 2 --worker-class uvicorn.workers.UvicornWorker --timeout 600 --log-level debug --capture-output main:app' >> /app/start.sh && \
     chmod +x /app/start.sh
 
 # Comando para ejecutar la aplicación con diagnóstico previo
