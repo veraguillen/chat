@@ -3,9 +3,12 @@
 .github
 .gitignore
 .gitattributes
+git-filter-repo-config.txt
 
 # Environment and IDE
 .env
+.env.backup
+.env.example
 .venv
 env/
 venv/
@@ -15,6 +18,7 @@ ENV/
 *.swp
 *.swo
 .DS_Store
+temp_settings.json
 
 # Python
 __pycache__/
@@ -28,6 +32,7 @@ eggs/
 *.egg-info/
 .installed.cfg
 *.egg
+pycache/
 
 # Logs
 *.log
@@ -36,17 +41,21 @@ logs/
 # Test files
 test/
 tests/
+all_test/
 .pytest_cache/
 .coverage
 htmlcov/
 
 # Local development
 deploy.sh
-deploy_azure.ps1
-deploy_azure_fixed.ps1
+deploy_azure*.ps1
+setup_azure_resources.ps1
+start*.bat
+start*.txt
 README.md
 *.md
 LICENSE
+hostingstart.html
 
 # Docker specific
 Dockerfile*
@@ -57,3 +66,23 @@ docker-compose*
 *.pkl
 *.faiss
 *.bin
+*.pt
+*.pth
+*.onnx
+
+# Data directories that should be mounted/downloaded at runtime
+data/
+knowledge_base/
+
+# Azure specific
+.deployment
+azure*
+.slugignore
+
+# Database
+*.db
+*.sqlite3
+
+# Other unnecessary files
+index.py
+run.py

@@ -41,9 +41,16 @@ jobs:
           # az account set --subscription "Nombre o ID de la suscripción"
 
       - name: Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: chat2025
+          password: ${{ secrets.ACR_PASSWORD }}
+          
+      - name: Check ACR Login Status
         run: |
-          echo "Iniciando sesión en ACR: ${{ env.ACR_NAME }}"
-          az acr login --name ${{ env.ACR_NAME }} --expose-token
+          echo "Verificando credenciales de ACR..."
+          docker info
           
       - name: Build and push Docker image
         run: |
