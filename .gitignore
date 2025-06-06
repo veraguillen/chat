@@ -135,3 +135,8 @@ dmypy.json
 
 # Archivos de Pyre type checker
 .pyre/
+# Archivos de configuración con secretos
+appsettings.json
+temp_settings.json
+.env
+*.env
