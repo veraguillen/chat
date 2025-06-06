@@ -1,8 +1,9 @@
 # app/ai/rag_retriever.py
 import os
+import sys
 import logging
 from pathlib import Path 
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict, Tuple
 import asyncio
 
 # --- Importaciones de Terceros (Langchain, Azure) ---
@@ -48,6 +49,9 @@ except ImportError:
     # No es crítico si no se usa la descarga desde Azure o si los archivos ya están locales
     # El logger principal (si está disponible) advertirá si se intenta la descarga sin SDK.
     AZURE_SDK_OK = False
+
+# --- Logger para este módulo ---
+logger = logging.getLogger(__name__)
 
 
 # --- Importar settings y logger de la aplicación ---
@@ -348,3 +352,109 @@ async def search_relevant_documents(
     #     for i, doc_f in enumerate(relevant_docs_final):
     #          logger.debug(f"    Doc Final {i}: Metadata={doc_f.metadata}, Preview='{doc_f.page_content[:100]}...'")
     return relevant_docs_final
+
+
+async def verify_faiss_index_access() -> Dict[str, Any]:
+    """
+    Verifica el acceso y funcionalidad del índice FAISS para el health check.
+    Intenta cargar el índice y realizar una consulta de prueba.
+    
+    Returns:
+        Dict[str, Any]: Un diccionario con información del estado del índice FAISS
+    """
+    logger.info("Verificando acceso al índice FAISS para health check")
+    result = {
+        "success": False,
+        "index_exists_local": False,
+        "index_query_ok": False,
+        "index_name": None,
+        "doc_count": 0,
+        "storage_info": {}
+    }
+    
+    try:
+        # Importar settings solo cuando es necesario para evitar problemas de importación circular
+        from app.core.config import settings
+        result["index_name"] = settings.FAISS_INDEX_NAME
+        
+        # Verificar si el índice existe localmente
+        local_index_dir = settings.FAISS_FOLDER_PATH
+        
+        if not local_index_dir or not local_index_dir.exists():
+            # Intentar descargar desde Azure
+            if settings.AZURE_STORAGE_CONNECTION_STRING and AZURE_SDK_OK:
+                result["storage_info"] = {
+                    "storage_account": settings.STORAGE_ACCOUNT_NAME,
+                    "container": settings.CONTAINER_NAME,
+                    "attempted_download": True
+                }
+                
+                try:
+                    # Crear directorio local si no existe
+                    local_index_dir = settings.BASE_DIR / "data" / "faiss_index"
+                    local_index_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Llamar a la función de descarga
+                    downloaded = await asyncio.to_thread(
+                        _download_faiss_files_from_azure,
+                        local_index_dir,
+                        settings.FAISS_INDEX_NAME,
+                        settings.STORAGE_ACCOUNT_NAME,
+                        settings.CONTAINER_NAME,
+                        settings.AZURE_STORAGE_CONNECTION_STRING
+                    )
+                    
+                    result["storage_info"]["download_success"] = downloaded
+                    
+                except Exception as e:
+                    logger.error(f"Error descargando índice FAISS para health check: {e}")
+                    result["storage_info"]["download_error"] = str(e)
+            else:
+                result["storage_info"]["error"] = "Configuración de Azure Storage no disponible"
+        
+        # Verificar nuevamente si el índice existe localmente después del intento de descarga
+        faiss_file = local_index_dir / f"{settings.FAISS_INDEX_NAME}.faiss"
+        pkl_file = local_index_dir / f"{settings.FAISS_INDEX_NAME}.pkl"
+        
+        result["index_exists_local"] = faiss_file.exists() and pkl_file.exists()
+        
+        if not result["index_exists_local"]:
+            return result
+        
+        # Si el índice existe, intentar cargarlo y hacer una consulta simple
+        if LANGCHAIN_OK:
+            try:
+                # Cargar modelo de embeddings
+                embeddings = HuggingFaceEmbeddings(model_name=settings.EMBEDDING_MODEL_NAME)
+                
+                # Cargar el índice localmente
+                vector_store = FAISS.load_local(str(local_index_dir), embeddings, settings.FAISS_INDEX_NAME)
+                
+                # Hacer una consulta simple para probar funcionalidad
+                test_query = "prueba de salud"
+                docs = vector_store.similarity_search(test_query, k=1)
+                
+                # Contar documentos totales en índice (esto es aproximado)
+                approx_doc_count = -1
+                try:
+                    # Intentar acceder a la propiedad interna de FAISS para contar documentos
+                    if hasattr(vector_store, "index") and hasattr(vector_store.index, "ntotal"):
+                        approx_doc_count = vector_store.index.ntotal
+                except:
+                    pass
+                
+                result["doc_count"] = approx_doc_count
+                result["index_query_ok"] = True
+                result["success"] = True
+                
+            except Exception as e:
+                logger.error(f"Error cargando o consultando índice FAISS: {e}")
+                result["error"] = str(e)
+        else:
+            result["error"] = "Langchain/FAISS no disponible"
+            
+    except Exception as e:
+        logger.error(f"Error en verificación de FAISS: {e}")
+        result["error"] = str(e)
+    
+    return result

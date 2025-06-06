@@ -13,6 +13,9 @@ env:
   RESOURCE_GROUP: beta-bot              # Grupo de recursos de Azure
   APP_NAME: grupo-beta                  # Nombre de la App Service
   
+  # Configuración para debugging
+  WEBSITES_CONTAINER_START_TIME_LIMIT: 600  # 10 minutos de tiempo límite para inicio del contenedor
+  
   # Configuración de la imagen
   TAG: ${{ github.sha }}                # Tag basado en el commit SHA
 
@@ -61,29 +64,73 @@ jobs:
       - name: Configure App Service
         run: |
           echo "Configurando variables de entorno en App Service..."
+          
+          # Verificar que todos los secrets requeridos existen
+          echo "Verificando disponibilidad de secrets..."
+          [ -z "${{ secrets.DATABASE_URL }}" ] && echo "⚠️ SECRET AUSENTE: DATABASE_URL" || echo "✓ SECRET ENCONTRADO: DATABASE_URL"
+          [ -z "${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" ] && echo "⚠️ SECRET AUSENTE: AZURE_STORAGE_CONNECTION_STRING" || echo "✓ SECRET ENCONTRADO: AZURE_STORAGE_CONNECTION_STRING"
+          [ -z "${{ secrets.WHATSAPP_ACCESS_TOKEN }}" ] && echo "⚠️ SECRET AUSENTE: WHATSAPP_ACCESS_TOKEN" || echo "✓ SECRET ENCONTRADO: WHATSAPP_ACCESS_TOKEN"
+          [ -z "${{ secrets.OPENROUTER_API_KEY }}" ] && echo "⚠️ SECRET AUSENTE: OPENROUTER_API_KEY" || echo "✓ SECRET ENCONTRADO: OPENROUTER_API_KEY"
+          
+          # Configuración de la base de datos PostgreSQL
+          echo "Configurando variables de PostgreSQL..."
+          az webapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --settings \
+              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+              PGHOST="chatbot-iram.postgres.database.azure.com" \
+              PGPORT="5432" \
+              PGDATABASE="chatbot_db" \
+              PGUSER="useradmin" \
+              PGPASSWORD="${{ secrets.PGPASSWORD }}" \
+              POSTGRES_SSL_MODE="require"
+              
+          # Configuración de Azure Storage para FAISS
+          echo "Configurando variables de Azure Storage..."
+          az webapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --settings \
+              STORAGE_ACCOUNT_NAME="chat2025" \
+              CONTAINER_NAME="chat2025" \
+              AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
+              FAISS_INDEX_NAME="index" \
+              FAISS_FOLDER_NAME="faiss_index_kb_spanish_v1"
+              
+          # Configuración de WhatsApp/Meta
+          echo "Configurando variables de WhatsApp..."
+          az webapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --settings \
+              WHATSAPP_VERIFY_TOKEN="${{ secrets.WHATSAPP_VERIFY_TOKEN }}" \
+              WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
+              WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}"
+              
+          # Configuración de API/Tokens
+          echo "Configurando variables de APIs..."
+          az webapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --settings \
+              OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" \
+              HUGGINGFACE_TOKEN="${{ secrets.HUGGINGFACE_TOKEN }}" \
+              CALENDLY_API_KEY="${{ secrets.CALENDLY_API_KEY }}" \
+              CALENDLY_EVENT_TYPE_URI="${{ secrets.CALENDLY_EVENT_TYPE_URI }}"
+              
+          # Configuración general de la aplicación
+          echo "Configurando variables generales..."
           az webapp config appsettings set \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --name ${{ env.APP_NAME }} \
             --settings \
               WEBSITES_PORT=8000 \
-              ENVIRONMENT=production \
-              DEBUG=False \
-              LOG_LEVEL=INFO \
+              ENVIRONMENT="production" \
+              DEBUG="False" \
+              LOG_LEVEL="INFO" \
               PROJECT_SITE_URL="https://${{ env.APP_NAME }}.azurewebsites.net" \
-              DATABASE_URL="${{ secrets.DATABASE_URL }}" \
-              WHATSAPP_VERIFY_TOKEN="${{ secrets.WHATSAPP_VERIFY_TOKEN }}" \
-              WHATSAPP_ACCESS_TOKEN="${{ secrets.WHATSAPP_ACCESS_TOKEN }}" \
-              WHATSAPP_PHONE_NUMBER_ID="${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}" \
-              AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
-              OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" \
-              HUGGINGFACE_TOKEN="${{ secrets.HUGGINGFACE_TOKEN }}" \
-              CALENDLY_API_KEY="${{ secrets.CALENDLY_API_KEY }}" \
-              CALENDLY_EVENT_TYPE_URI="${{ secrets.CALENDLY_EVENT_TYPE_URI }}" \
-              STORAGE_ACCOUNT_NAME=chat2025 \
-              CONTAINER_NAME=chat2025 \
               EMBEDDING_MODEL_NAME="sentence-transformers/paraphrase-multilingual-mpnet-base-v2" \
-              FAISS_INDEX_NAME="index" \
-              FAISS_FOLDER_NAME="faiss_index_kb_spanish_v1" \
               RAG_DEFAULT_K=3 \
               RAG_K_FETCH_MULTIPLIER=2 \
               RAG_MIN_CONTEXT_LENGTH_THRESHOLD=50 \
@@ -97,10 +144,25 @@ jobs:
               CALENDLY_DAYS_TO_CHECK=7 \
               CALENDLY_GENERAL_SCHEDULING_LINK="https://calendly.com/chatbotiram-mex/ira-mexico"
           
-      - name: Restart App Service
+      - name: Restart App Service y verificar logs
         run: |
-          echo "Restarting App Service..."
+          echo "Configurando logging detallado..."
+          az webapp log config \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --docker-container-logging filesystem
+            
+          echo "Reiniciando App Service..."
           az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }}
+          
+          echo "Esperando 30 segundos para que la aplicación se reinicie..."
+          sleep 30
+          
+          echo "Verificando estado de la aplicación..."
+          az webapp show --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }} --query state -o tsv
+          
+          echo "Para ver los logs de la aplicación en tiempo real, use:"
+          echo "az webapp log tail --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.APP_NAME }}"
           
           echo "Waiting for application to restart..."
           sleep 30

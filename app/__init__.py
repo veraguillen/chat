@@ -135,6 +135,19 @@ else:
         # from .api import router as general_api_router
         # app.include_router(general_api_router, prefix="/api") 
         # logger.info("Router general_api_router incluido con prefijo /api.")
+        
+        # Importar routers API específicos
+        from app.api.meta import meta_router
+        from app.api.webhook import webhook_router
+        from app.api.rag import rag_router
+        from app.api.health import health_router
+        
+        # Incluir routers en la aplicación
+        app.include_router(meta_router)
+        app.include_router(webhook_router)
+        app.include_router(rag_router)
+        app.include_router(health_router)
+        logger.info("Routers API específicos incluidos (meta, webhook, rag, health).")
     except Exception as e_router_final:
         logger.critical(f"Error al incluir routers en la instancia FastAPI: {e_router_final}", exc_info=True)
 
